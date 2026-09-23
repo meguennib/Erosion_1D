@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs
+.idea/
+.vscode/
+
+# Data and results
+output_all_stabilized/
+output_revision/
+*.npz
+*.log
+*.pdf
+*.png
+*.svg
+*.zip
+*.docx
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
