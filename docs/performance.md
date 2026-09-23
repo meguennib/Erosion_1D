@@ -56,9 +56,9 @@ case took approximately:
 
 | Configuration | Runtime |
 |---|---:|
-| Original vectorised residual with field construction at every trial | 0.225 s |
+| Original vectorised residual with field construction at every trial | 0.236 s |
 | Accelerated kernel, first process including JIT compilation | 0.369 s |
-| Accelerated kernel, warmed process | 0.070 s |
+| Accelerated kernel, warmed process | 0.064 s |
 
 The first Numba call includes compilation and is therefore not a fair measure
 of a long campaign. For the large reference campaign, the compilation cost is
