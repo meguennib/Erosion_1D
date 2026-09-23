@@ -1,4 +1,7 @@
-from run_reviewfix import main
+"""Official entry point for the reference simulation campaign."""
+
+from run_revision import main
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

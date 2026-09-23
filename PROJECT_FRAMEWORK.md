@@ -22,9 +22,10 @@ The primary goal of this research project was to develop a robust, physics-based
 During the development phase, the explicit coupling of the highly non-linear erosion source terms with the advective transport equations introduced severe numerical stiffness. Initial iterations suffered from high-frequency spatial oscillations ("checkerboarding") and required artificial morphological acceleration factors (`morfac`) to observe significant erosion at laboratory scales, which masked the true physical time scales.
 
 ## 3. Achieved Objectives and Milestones
-The current version of the code successfully overcomes these challenges, achieving all initial objectives through rigorous physical and numerical stabilization:
+The current reference implementation addresses these challenges through the following physical and numerical choices:
 
-*   **Numerical Stabilization:** The model was successfully stabilized using a 2nd-order Finite Volume Method with a MUSCL scheme and a MinMod flux limiter. This guarantees a Total Variation Diminishing (TVD) property, eliminating unphysical oscillations.
-*   **Strict Physical Time-Stepping:** We implemented a dynamic, dual-constrained CFL condition (advective and erosive). The simulation now runs entirely in real physical time, entirely eliminating the need for artificial morphological acceleration.
-*   **Continuous Rheological Coupling:** The implementation of a $C^1$-continuous smoothing function for the Julien friction multiplier prevents numerical shocks while accurately representing the increased dissipation caused by the sediment load.
-*   **Recovery of the "Trumpet" Geometry:** We successfully demonstrated that the downstream widening of the pipe is a natural consequence of the rheological feedback. The model proves that this geometric asymmetry is directly triggered by the physical properties of the sediment (specifically the particle diameter) and the spatial scale of the domain (laboratory vs. field scale).
+*   **Conservative transport:** The transported state is the suspended-solid volume per unit axial length, $S=A\phi$, rather than concentration alone. This preserves the solid-volume balance as the conduit area evolves.
+*   **Numerical stabilization:** The reference solver uses a MUSCL finite-volume reconstruction with a MinMod flux limiter for the conservative transport equation. The complete coupled method is explicitly documented as operator-split in time.
+*   **Strict physical time-stepping:** The radius is advanced directly with $R_t=\dot m/\rho_{soil,sat}$ using a dynamic advective/source constraint. No artificial morphological acceleration factor is used.
+*   **Continuous rheological coupling:** The Julien multiplier is regularised with the documented hyperbolic-tangent law and actively bounded by $f_{m,max}$ during the hydraulic solve.
+*   **Trumpet geometry:** Downstream widening emerges from conservative solid transport, concentration-dependent rheology, and the dependence of wall stress on the evolving radius. Particle diameter and spatial scale control the strength of this feedback.

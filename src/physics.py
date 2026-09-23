@@ -1,111 +1,143 @@
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
 
-def rho_mix(phi, rho_w, rho_p):
+
+def rho_mix(phi, rho_w: float, rho_p: float):
+    """Mixture density for a local suspended solid volume fraction ``phi``."""
     return rho_w + phi * (rho_p - rho_w)
 
-def rho_soil_sat(rho_w, rho_p, phi_soil):
+
+def rho_soil_sat(rho_w: float, rho_p: float, phi_soil: float):
+    """Bulk density of intact saturated soil at ``phi_soil``."""
     return rho_w + phi_soil * (rho_p - rho_w)
 
+
 def barenblatt_fw(Re):
-    """
-    Complete Darcy-Weisbach friction factor f_D.
+    """Return the full Darcy-Weisbach friction factor ``f_D``.
 
-    Based on Barenblatt's power law with alpha = 3/(2 ln Re).
-    Returns f_D such that: tau_b = (1/8) * f_D * rho * u^2
+    The wall-stress law is
 
-    Correction:
-      The returned value is now the FULL Darcy factor f_D.
-      The 1/8 coefficient is applied explicitly in shear_tau_b,
-      following the strict Darcy-Weisbach formulation.
+        tau_b = -(1/8) * f_D * rho * f_m * u**2.
+
+    ``Re`` is floored before evaluating the Barenblatt exponent and the
+    exponent is clipped to keep the constitutive law finite near ``Re=1``.
     """
-    Re = np.maximum(Re, 1.0000001)
+    Re = np.maximum(np.asarray(Re, dtype=float), 1.0000001)
     alpha = 3.0 / (2.0 * np.log(Re))
-
-    # robust clamping (avoid alpha->inf when Re->1)
     alpha = np.clip(alpha, 1e-3, 0.5)
 
-    num = (2.0 ** alpha) * alpha * (1.0 + alpha) * (2.0 + alpha)
-    den = (np.exp(1.5)) * (np.sqrt(3.0) + 5.0 * alpha)
+    num = (2.0**alpha) * alpha * (1.0 + alpha) * (2.0 + alpha)
+    den = np.exp(1.5) * (np.sqrt(3.0) + 5.0 * alpha)
+    return 8.0 * (num / den) ** (2.0 / (1.0 + alpha))
 
-    # f_D = full Darcy factor
-    fD = 8.0 * (num / den) ** (2.0 / (1.0 + alpha))
-    return fD
 
 def beta_barenblatt(Re):
-    """
-    beta(Re) from the same alpha parameterization.
-    """
-    Re = np.maximum(Re, 1.0000001)
+    """Return the Barenblatt momentum/transport coefficient ``beta(Re)``."""
+    Re = np.maximum(np.asarray(Re, dtype=float), 1.0000001)
     alpha = 3.0 / (2.0 * np.log(Re))
     alpha = np.clip(alpha, 1e-3, 0.5)
-    beta = ((1.0 + alpha) * (2.0 + alpha) ** 2) / (4.0 * (1.0 + 2.0 * alpha))
-    return beta
+    return ((1.0 + alpha) * (2.0 + alpha) ** 2) / (4.0 * (1.0 + 2.0 * alpha))
 
-def julien_lambda(phi, phi_soil, eps=1e-12):
+
+def julien_lambda(phi, phi_soil: float, eps: float = 1e-12):
+    """Return Julien's concentration parameter with singularity protection.
+
+    The clipping only protects the endpoints of the admissible concentration
+    interval.  The C1 rheological smoothing is applied later to ``fm_raw``;
+    this function itself is not a smoothing function.
     """
-    lambda(phi) = 1 / ((phi_soil/phi)^(1/3) - 1)
-    diverges as phi -> phi_soil.
-    """
+    phi = np.asarray(phi, dtype=float)
     phi = np.clip(phi, eps, phi_soil * (1.0 - 1e-6))
     return 1.0 / ((phi_soil / phi) ** (1.0 / 3.0) - 1.0)
 
-def fm_julien(phi, p):
-    """
-    Julien mixture friction multiplier with:
-      lm_mode = "clR0"  => lm = cl*R0 constant (Option A)
-      power = julien_lambda_power = 2 (requested)
 
-    Classical scaling:
-      a = cB * (rho_p/rho) * (dp/lm)^2
-      fm = 1 + a * lambda(phi)^power
+def fm_julien_raw(phi, p: Any):
+    """Return the uncapped Julien mixture-friction multiplier.
 
-    NOTE — NO CAP APPLIED HERE:
-      Any cap (hard min or smooth tanh) on fm during the time-stepping
-      introduces a mathematical discontinuity (or near-discontinuity)
-      that MUSCL/TVD slope limiters interpret as a genuine extremum,
-      triggering excessive limiting and sawtooth oscillations at the
-      advective front.
+    The raw law is
 
-      The solver must operate on the raw, unbounded fm so that the
-      spatial gradient of fm is smooth everywhere. The cap fm <= 5.0
-      is enforced ONLY as a post-processing step inside the plotting
-      scripts (np.minimum(fm_raw, 5.0)), never during the solve.
+        fm_raw = 1 + cB * (rho_p/rho) * (dp/lm)**2 * lambda(phi)**n.
 
-      fm_raw = 1 + a * lambda^power is C-infinity in phi because:
-        - julien_lambda is C-inf away from phi=0 (phi is clipped to eps)
-        - the only singularity is at phi -> phi_soil, which is also
-          clipped (phi <= phi_soil*(1-1e-6)), so the formula is bounded
-          by construction given the physical state constraints.
+    It is retained for diagnostics only.  The hydrodynamic solver must use
+    :func:`fm_julien`, which applies the active smooth ``fm_max`` cap.
     """
     rho = rho_mix(phi, p.rho_w, p.rho_p)
 
-    if p.lm_mode == "clR0":
-        lm = p.cl * p.R0
-    else:
-        # fallback safe default
-        lm = p.cl * p.R0
+    if p.lm_mode != "clR0":
+        raise ValueError(f"Unsupported Julien mixing-length mode: {p.lm_mode}")
+    lm = p.cl * p.R0
+    if lm <= 0.0:
+        raise ValueError("Julien mixing length must be strictly positive")
 
     lam = julien_lambda(phi, p.phi_soil)
-    a = p.cB * (p.rho_p / rho) * (p.dp / lm) ** 2
+    coefficient = p.cB * (p.rho_p / rho) * (p.dp / lm) ** 2
+    return 1.0 + coefficient * (lam ** p.julien_lambda_power)
 
-    # Raw, unbounded fm — NO cap, NO tanh blending, NO np.minimum
-    fm = 1.0 + a * (lam ** p.julien_lambda_power)
-    return fm
+
+def fm_julien(phi, p: Any):
+    """Return Julien's C1-smoothed, physically capped multiplier.
+
+    The active constitutive law is
+
+        fm = 1 + (fm_max - 1) * tanh((fm_raw - 1)/(fm_max - 1)).
+
+    For the admissible positive parameters, ``fm_raw >= 1`` and therefore
+    ``1 <= fm < fm_max``.  The hyperbolic tangent is smooth; endpoint clips
+    on ``phi`` remain separate numerical domain guards.
+    """
+    fm_max = float(p.fm_max)
+    if fm_max <= 1.0:
+        raise ValueError("fm_max must be strictly greater than 1")
+
+    fm_raw = fm_julien_raw(phi, p)
+    span = fm_max - 1.0
+    z = (fm_raw - 1.0) / span
+    return 1.0 + span * np.tanh(z)
 
 
 def shear_tau_b(rho, fw, fm, u):
-    """
-    Wall shear stress — strict Darcy-Weisbach formulation:
-        tau_b = -(1/8) * f_D * rho * fm * u^2
+    """Return wall shear stress using the full Darcy factor ``fw``."""
+    return -(1.0 / 8.0) * rho * fw * fm * (u**2)
 
-    Correction:
-      The 1/8 coefficient is now EXPLICIT.
-      fw must be the FULL Darcy factor f_D returned by barenblatt_fw.
-    """
-    return -(1.0 / 8.0) * rho * fw * fm * (u ** 2)
 
-def mdot_erosion(tau_b, tau_c, k_er):
-    """
-    m_dot = k_er * max(|tau_b| - tau_c, 0)
+def mdot_erosion(tau_b, tau_c: float, k_er: float):
+    """Return erosion mass flux ``mdot`` [kg m^-2 s^-1].
+
+    ``mdot`` is the positive mass flux of intact saturated soil removed from
+    the wall.  The corresponding radial wall-growth rate is
+
+        R_t = mdot / rho_soil_sat.
+
+    The coefficient ``k_er`` carries the calibrated units needed to transform
+    excess shear stress into this mass flux.
     """
     return k_er * np.maximum(np.abs(tau_b) - tau_c, 0.0)
+
+
+def radius_growth_rate(mdot, rho_soil_sat_value):
+    """Convert erosion mass flux into radial growth rate ``R_t`` [m/s]."""
+    if rho_soil_sat_value <= 0.0:
+        raise ValueError("rho_soil_sat must be strictly positive")
+    return np.asarray(mdot, dtype=float) / rho_soil_sat_value
+
+
+def conservative_solid_source(area_old, area_new, phi_soil: float):
+    """Return the solid-volume source caused by a wall-area increment.
+
+    The newly opened saturated-soil volume carries the intact solid fraction,
+    so the source in ``S=A*phi`` is ``phi_soil * (A_new-A_old)``.  The helper
+    keeps this conservation statement in the physical layer rather than
+    hiding it inside the time integrator.
+    """
+    area_old = np.asarray(area_old, dtype=float)
+    area_new = np.asarray(area_new, dtype=float)
+    if area_old.shape != area_new.shape:
+        raise ValueError("area_old and area_new must have identical shapes")
+    if not (0.0 <= phi_soil <= 1.0):
+        raise ValueError("phi_soil must lie between 0 and 1")
+    if np.any(area_new < area_old):
+        raise ValueError("the erosion source cannot decrease the conduit area")
+    return phi_soil * (area_new - area_old)

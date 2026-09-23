@@ -21,8 +21,7 @@
         "Re_min": 1.0,
         "K_out": 0.0,
         "phi_scheme": "muscl",
-        "phi_form": "conservative",
-        "include_inertia_px": false,
+        "phi_form": "conservative_area",
         "dt_mode": "adaptive",
         "dt_min": 1e-06,
         "dt_max": 10.0,
@@ -37,7 +36,8 @@
             6.8,
             15.7
         ],
-        "log_every_steps": 500
+        "log_every_steps": 500,
+        "phi_limiter": "minmod"
     },
     "fig2_strict_tau10_kout0_prudent": {
         "description": "Lachouette Fig.2 strict: L=100m, R0=3mm, Pin=3.33MPa, tau_c=10Pa, Kout=0, prudent dt_max",
@@ -61,8 +61,7 @@
         "Re_min": 3000.0,
         "K_out": 0.0,
         "phi_scheme": "muscl",
-        "phi_form": "conservative",
-        "include_inertia_px": false,
+        "phi_form": "conservative_area",
         "dt_mode": "adaptive",
         "dt_min": 1e-06,
         "dt_max": 0.0005,
@@ -77,7 +76,8 @@
             6.8,
             15.7
         ],
-        "log_every_steps": 5000
+        "log_every_steps": 5000,
+        "phi_limiter": "minmod"
     },
     "fig2_strict_tau10_kout10_cflactive": {
         "description": "Lachouette Fig.2 strict: L=100m, R0=3mm, Pin=3.33MPa, tau_c=10Pa, Kout=10, prudent dt_max; dt_max raised for CFL-active study",
@@ -101,8 +101,7 @@
         "Re_min": 3000.0,
         "K_out": 10.0,
         "phi_scheme": "muscl",
-        "phi_form": "conservative",
-        "include_inertia_px": false,
+        "phi_form": "conservative_area",
         "dt_mode": "adaptive",
         "dt_min": 1e-06,
         "dt_max": 10.0,
@@ -117,7 +116,8 @@
             6.8,
             15.7
         ],
-        "log_every_steps": 5000
+        "log_every_steps": 5000,
+        "phi_limiter": "minmod"
     },
     "fig2_strict_tau10_kout10_long_Nx300": {
         "description": "Lachouette Fig.2 strict: L=100m, R0=3mm, Pin=3.33MPa, tau_c=10Pa, Kout=10, prudent dt_max; dt_max raised for CFL-active study; Nx=300 for long-run figure",
@@ -141,8 +141,7 @@
         "Re_min": 3000.0,
         "K_out": 10.0,
         "phi_scheme": "muscl",
-        "phi_form": "conservative",
-        "include_inertia_px": false,
+        "phi_form": "conservative_area",
         "dt_mode": "adaptive",
         "dt_min": 1e-06,
         "dt_max": 10.0,
@@ -157,7 +156,8 @@
             6.8,
             15.7
         ],
-        "log_every_steps": 5000
+        "log_every_steps": 5000,
+        "phi_limiter": "minmod"
     },
     "fig2_strict_tau10_kout500_long_Nx300": {
         "description": "Same as strict case but K_out=500 for stabilized long run; dt_max=10",
@@ -181,8 +181,7 @@
         "Re_min": 3000.0,
         "K_out": 500.0,
         "phi_scheme": "muscl",
-        "phi_form": "conservative",
-        "include_inertia_px": false,
+        "phi_form": "conservative_area",
         "dt_mode": "adaptive",
         "dt_min": 1e-06,
         "dt_max": 10.0,
@@ -197,7 +196,8 @@
             6.8,
             15.7
         ],
-        "log_every_steps": 5000
+        "log_every_steps": 5000,
+        "phi_limiter": "minmod"
     },
     "fig2_strict_tau10_kout500_Rbreak2_long_Nx300": {
         "description": "Same as strict case but K_out=500 for stabilized long run; dt_max=10; R_break raised to 2.0m to allow reaching 15.7 ter",
@@ -221,8 +221,7 @@
         "Re_min": 3000.0,
         "K_out": 500.0,
         "phi_scheme": "muscl",
-        "phi_form": "conservative",
-        "include_inertia_px": false,
+        "phi_form": "conservative_area",
         "dt_mode": "adaptive",
         "dt_min": 1e-06,
         "dt_max": 10.0,
@@ -237,7 +236,8 @@
             6.8,
             15.7
         ],
-        "log_every_steps": 5000
+        "log_every_steps": 5000,
+        "phi_limiter": "minmod"
     },
     "fig2_strict_tau10_kout500_Rbreak2_long_Nx100": {
         "description": "Same as strict case but K_out=500 for stabilized long run; dt_max=10; R_break raised to 2.0m to allow reaching 15.7 ter",
@@ -261,8 +261,7 @@
         "Re_min": 3000.0,
         "K_out": 500.0,
         "phi_scheme": "muscl",
-        "phi_form": "conservative",
-        "include_inertia_px": false,
+        "phi_form": "conservative_area",
         "dt_mode": "adaptive",
         "dt_min": 1e-06,
         "dt_max": 10.0,
@@ -277,6 +276,7 @@
             6.8,
             15.7
         ],
-        "log_every_steps": 5000
+        "log_every_steps": 5000,
+        "phi_limiter": "minmod"
     }
 }

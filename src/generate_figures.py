@@ -42,9 +42,10 @@ def plot_figure3_spatial_profiles(run_dir, output_name="Figure3_Revised.png"):
     Pin = config['Pin']
     phi_soil = config['phi_soil']
     
-    # Snapshots saved at t/ter = 0, 0.5, 1.0, 2.0, 2.5
-    # Select 3 representative instances: t/ter = 0, 1.0, 2.5
-    # ter is not stored directly — recalculate from t_final / t_final_over_ter
+    # Select representative snapshots from the target-time metadata.  The
+    # characteristic time is stored in the manifest through t_final/ter.
+    # ter is not stored directly in older manifests, so recalculate it when
+    # necessary.
     t_final = manifest.get('t_final', None)
     t_final_over_ter = manifest.get('t_final_over_ter', None)
     if t_final is not None and t_final_over_ter:
@@ -54,7 +55,8 @@ def plot_figure3_spatial_profiles(run_dir, output_name="Figure3_Revised.png"):
     target_times = [0.0 * ter, 1.0 * ter, 2.5 * ter]
     
     fig, axes = plt.subplots(4, 3, figsize=(12, 10), sharex=True)
-    x = np.linspace(0, L, config['Nx']) / L
+    dx = L / config['Nx']
+    x = ((np.arange(config['Nx']) + 0.5) * dx) / L
     
     t_star = manifest.get('t_star_1D', None)
 

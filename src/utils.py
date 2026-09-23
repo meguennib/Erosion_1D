@@ -11,7 +11,9 @@ from .config import params_from_dict
 
 
 def load_scenario(name: str):
-    data_path = Path("data") / "scenarios.json"
+    """Load a validated scenario independently of the current working dir."""
+    repo_root = Path(__file__).resolve().parents[1]
+    data_path = repo_root / "data" / "scenarios.json"
     with open(data_path, "r", encoding="utf-8") as f:
         all_sc = json.load(f)
     if name not in all_sc:

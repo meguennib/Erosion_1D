@@ -1,4 +1,6 @@
 # src/numerics.py
+from __future__ import annotations
+
 import numpy as np
 
 
@@ -6,21 +8,18 @@ import numpy as np
 # Derivatives
 # -----------------------------
 def ddx_centered(q: np.ndarray, dx: float) -> np.ndarray:
-    """
-    Centered derivative with one-sided at boundaries.
-    q is cell-centered of length N.
-    """
+    """Centered derivative with one-sided differences at the boundaries."""
     q = np.asarray(q, dtype=float)
+    if dx <= 0.0:
+        raise ValueError("dx must be strictly positive")
+
     N = q.size
     dq = np.zeros_like(q)
-
     if N < 2:
         return dq
 
-    # one-sided
     dq[0] = (q[1] - q[0]) / dx
     dq[-1] = (q[-1] - q[-2]) / dx
-
     if N > 2:
         dq[1:-1] = (q[2:] - q[:-2]) / (2.0 * dx)
     return dq
@@ -30,39 +29,36 @@ def ddx_centered(q: np.ndarray, dx: float) -> np.ndarray:
 # Limiters (TVD)
 # -----------------------------
 def _minmod(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """
-    minmod limiter.
-    """
-    s = np.sign(a) + np.sign(b)
+    """Pairwise minmod limiter."""
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
     out = np.zeros_like(a)
-    mask = (np.abs(s) > 1.5)  # same sign
-    out[mask] = np.sign(a[mask]) * np.minimum(np.abs(a[mask]), np.abs(b[mask]))
+    same_sign = (a * b) > 0.0
+    out[same_sign] = np.sign(a[same_sign]) * np.minimum(
+        np.abs(a[same_sign]), np.abs(b[same_sign])
+    )
     return out
 
 
+def limiter_minmod(dL: np.ndarray, dR: np.ndarray) -> np.ndarray:
+    """Classical MinMod slope."""
+    return _minmod(dL, dR)
+
+
 def limiter_mc(dL: np.ndarray, dR: np.ndarray) -> np.ndarray:
-    """
-    Monotonized Central (MC) limiter:
-      slope = minmod( 2 dL, 0.5(dL+dR), 2 dR )
-    Implemented via pairwise minmod.
-    """
-    a = 2.0 * dL
-    b = 0.5 * (dL + dR)
-    c = 2.0 * dR
-    return _minmod(_minmod(a, b), c)
+    """Monotonized-central limiter."""
+    return _minmod(
+        _minmod(2.0 * dL, 0.5 * (dL + dR)),
+        2.0 * dR,
+    )
 
 
 def limiter_vanleer(dL: np.ndarray, dR: np.ndarray) -> np.ndarray:
-    """
-    van Leer limiter: smooth, TVD, less diffusive than minmod.
-    slope = (r + |r|) / (1 + |r|)  where r = dL / dR.
-    Returns 0 where signs differ.
-    """
+    """van Leer limiter, retained for controlled comparison studies."""
     dL = np.asarray(dL, dtype=float)
     dR = np.asarray(dR, dtype=float)
     out = np.zeros_like(dL)
-    # Only apply where same sign
-    mask = (dL * dR > 0)
+    mask = (dL * dR) > 0.0
     r = np.zeros_like(dL)
     r[mask] = dL[mask] / (dR[mask] + 1e-30)
     out[mask] = (r[mask] + np.abs(r[mask])) / (1.0 + np.abs(r[mask])) * dR[mask]
@@ -73,133 +69,134 @@ def limiter_vanleer(dL: np.ndarray, dR: np.ndarray) -> np.ndarray:
 # Ghost cells helper
 # -----------------------------
 def _fill_ghost_dirichlet_neumann(q: np.ndarray, q_in: float) -> np.ndarray:
-    """
-    Build 2-ghost array for a cell-centered field q (size N):
-      - inlet Dirichlet: q = q_in at x=0 boundary -> set left ghosts to q_in
-      - outlet Neumann: dq/dx = 0 at x=L -> set right ghosts equal to last interior
-    Returns qg of size N+4 with interior at indices [2 : N+2].
-    """
+    """Build a two-ghost-cell array with inlet Dirichlet and outlet Neumann."""
     q = np.asarray(q, dtype=float)
     N = q.size
+    if N == 0:
+        return np.empty(0, dtype=float)
+
     qg = np.empty(N + 4, dtype=float)
-
-    # interior
     qg[2:-2] = q
-
-    # inlet Dirichlet
     qg[0] = q_in
     qg[1] = q_in
-
-    # outlet Neumann
     qg[-2] = q[-1]
     qg[-1] = q[-1]
     return qg
 
 
 def _fill_ghost_neumann(a: np.ndarray) -> np.ndarray:
-    """
-    Ghosting for velocity a (size N). We use zero-gradient on both ends
-    (copy boundary values). This is stable for flux construction.
-    """
+    """Build a two-ghost-cell zero-gradient array for the velocity field."""
     a = np.asarray(a, dtype=float)
     N = a.size
+    if N == 0:
+        return np.empty(0, dtype=float)
+
     ag = np.empty(N + 4, dtype=float)
     ag[2:-2] = a
-
-    # left
     ag[0] = a[0]
     ag[1] = a[0]
-
-    # right
     ag[-2] = a[-1]
     ag[-1] = a[-1]
     return ag
 
 
 # -----------------------------
-# Advection
+# Conservative advection
 # -----------------------------
+def advection_conservative(
+    q: np.ndarray,
+    a: np.ndarray,
+    dx: float,
+    dt: float,
+    *,
+    q_in: float = 0.0,
+    scheme: str = "muscl",
+    limiter: str = "minmod",
+) -> np.ndarray:
+    """Advect a conservative scalar ``q`` with velocity ``a``.
+
+    The solved equation is
+
+        q_t + (a q)_x = 0.
+
+    In the erosion model ``q`` is the solid volume per unit axial length,
+    ``S = A*phi``.  Advecting ``S`` rather than ``phi`` preserves the total
+    suspended solid volume when the conduit area varies.
+
+    The inlet uses a Dirichlet value ``q_in`` and the outlet uses a zero
+    gradient condition.  MUSCL reconstruction is paired with an upwind
+    Godunov flux for the variable-coefficient linear advection equation.
+    """
+    q = np.asarray(q, dtype=float)
+    a = np.asarray(a, dtype=float)
+    if q.ndim != 1 or a.ndim != 1 or q.size != a.size:
+        raise ValueError("q and a must be one-dimensional arrays of equal size")
+    if dx <= 0.0 or dt < 0.0:
+        raise ValueError("dx must be positive and dt must be non-negative")
+    if q.size == 0 or dt == 0.0:
+        return q.copy()
+
+    scheme_name = scheme.lower()
+    limiter_name = limiter.lower()
+    if scheme_name not in {"muscl", "upwind"}:
+        raise ValueError("scheme must be 'muscl' or 'upwind'")
+    if limiter_name not in {"minmod", "vanleer", "mc"}:
+        raise ValueError("limiter must be 'minmod', 'vanleer', or 'mc'")
+
+    qg = _fill_ghost_dirichlet_neumann(q, float(q_in))
+    ag = _fill_ghost_neumann(a)
+    a_face = 0.5 * (ag[:-1] + ag[1:])
+
+    if scheme_name == "muscl":
+        dL = qg[1:-1] - qg[:-2]
+        dR = qg[2:] - qg[1:-1]
+        slope = np.zeros_like(qg)
+        if limiter_name == "minmod":
+            slope[1:-1] = limiter_minmod(dL, dR)
+        elif limiter_name == "vanleer":
+            slope[1:-1] = limiter_vanleer(dL, dR)
+        else:
+            slope[1:-1] = limiter_mc(dL, dR)
+        qL = qg[:-1] + 0.5 * slope[:-1]
+        qR = qg[1:] - 0.5 * slope[1:]
+    else:
+        qL = qg[:-1]
+        qR = qg[1:]
+
+    flux = a_face * np.where(a_face >= 0.0, qL, qR)
+    qnew = qg.copy()
+    c = dt / dx
+    qnew[2 : q.size + 2] = qg[2 : q.size + 2] - c * (
+        flux[2 : q.size + 2] - flux[1 : q.size + 1]
+    )
+    return qnew[2 : q.size + 2].copy()
+
+
 def advection_phi(
     phi: np.ndarray,
     a: np.ndarray,
     dx: float,
     dt: float,
     scheme: str = "muscl",
-    form: str = "nonconservative",
+    form: str = "conservative_area",
     phi_in: float = 0.0,
     limiter: str = "minmod",
 ) -> np.ndarray:
+    """Compatibility wrapper for scalar tests.
+
+    The production solver transports ``S=A*phi`` through
+    :func:`advection_conservative`.  This wrapper remains available for
+    isolated numerical tests, but the former non-conservative form is no
+    longer part of the scientific reference model.
     """
-    Advect phi by a(x) using a FV scheme with explicit ghost cells:
-      - phi inlet Dirichlet: phi=phi_in
-      - outlet Neumann: dphi/dx=0
-    Two options for PDE form:
-      - form="conservative"     : phi_t + (a phi)_x = 0
-      - form="nonconservative" : phi_t + a phi_x = 0
-            implemented via conservative update + dt*(a_x * phi) correction because:
-              a phi_x = (a phi)_x - a_x phi
-              => phi_t + (a phi)_x = a_x phi
-    scheme:
-      - "upwind": 1st order
-      - "muscl" : MUSCL-TVD with selectable limiter
-    limiter: "minmod", "vanleer", or "mc"
-    """
-    phi = np.asarray(phi, dtype=float)
-    a = np.asarray(a, dtype=float)
-    N = phi.size
-    if N == 0:
-        return phi.copy()
-
-    # ghosted arrays
-    qg = _fill_ghost_dirichlet_neumann(phi, phi_in)
-    ag = _fill_ghost_neumann(a)
-
-    # face velocities (between cell j and j+1)
-    # faces count = (N+4)-1 = N+3
-    a_face = 0.5 * (ag[:-1] + ag[1:])
-
-    # reconstruct states for MUSCL, or use piecewise-constant for upwind
-    if scheme.lower() == "muscl":
-        # slopes on cells (aligned with qg indices)
-        # dL and dR defined on qg[1:-1] (size N+2)
-        dL = qg[1:-1] - qg[0:-2]
-        dR = qg[2:  ] - qg[1:-1]
-        s = np.zeros_like(qg)
-        # STABILIZATION (Step 3 — selectable limiter):
-        # MinMod guarantees strict TVD at all CFL but is diffusive.
-        # vanLeer is smoother than MC and less diffusive than minmod.
-        if limiter.lower() == "vanleer":
-            s[1:-1] = limiter_vanleer(dL, dR)
-        elif limiter.lower() == "mc":
-            s[1:-1] = limiter_mc(dL, dR)
-        else:  # default: minmod
-            s[1:-1] = _minmod(dL, dR)
-
-        # left/right states at faces
-        qL = qg[:-1] + 0.5 * s[:-1]
-        qR = qg[1: ] - 0.5 * s[1: ]
-    else:
-        # upwind (1st order): left/right are just cell values
-        qL = qg[:-1]
-        qR = qg[1:]
-
-    # Upwind flux (Godunov for linear advection)
-    F = a_face * np.where(a_face >= 0.0, qL, qR)
-
-    # Conservative FV update on interior cells i = 2..N+1
-    c = dt / dx
-    qnew = qg.copy()
-    # cell i uses outflux F[i] (i+1/2) and influx F[i-1] (i-1/2)
-    qnew[2:N+2] = qg[2:N+2] - c * (F[2:N+2] - F[1:N+1])
-
-    phi_adv = qnew[2:N+2].copy()
-
-    # Nonconservative correction: + dt * a_x * phi (evaluated at old time)
     if form.lower().startswith("non"):
-        ax = ddx_centered(a, dx)
-        phi_adv = phi_adv + dt * ax * phi
-
-    # enforce bounds softly (caller may clip with phi_soil)
-    # keep inlet cell non-negative in case of small undershoot
-    phi_adv = np.where(np.isfinite(phi_adv), phi_adv, 0.0)
-    return phi_adv
+        raise ValueError("non-conservative phi transport is not supported")
+    return advection_conservative(
+        phi,
+        a,
+        dx,
+        dt,
+        q_in=phi_in,
+        scheme=scheme,
+        limiter=limiter,
+    )

@@ -1,38 +1,130 @@
 # Physical and Morphological Dynamics Model
 
-This document outlines the physical principles implemented in the 1D internal erosion simulation code, and details the dynamic processes leading to asymmetric geometric profiles (the "trumpet" effect).
+The model represents water and suspended eroded soil flowing through an
+initially cylindrical, erodible conduit. The conduit radius changes because
+of wall shear, while the suspended solid volume changes through advection and
+wall-erosion injection.
 
-## 1. Physical Context of Internal Erosion
-The model simulates water flow through an erodible conduit. The geometry of the conduit evolves over time due to the shear stress exerted by the fluid on the walls.
-Two main dynamics are strongly coupled:
-1. **Hydrodynamics:** Calculation of the fluid velocity and pressure along the conduit for a given pressure gradient.
-2. **Sediment Transport:** The erosion of the walls increases the suspended sediment concentration ($\phi$) within the flow.
+## 1. Mixture and geometry
 
-## 2. Rheological Feedback
-A key aspect of the model is the feedback of the sediment concentration on the fluid rheology.
-As water flows and erodes the walls, the suspended sediment concentration increases from upstream to downstream. This denser suspension modifies the effective fluid friction against the wall.
+The local mixture density is
 
-A friction multiplier, $f_m(x)$, is utilized to model this additional resistance.
-*   **Upstream:** Clear water enters with zero sediment concentration ($f_m \approx 1.0$).
-*   **Downstream:** The accumulated sediment concentration generates collisional dissipation within the boundary layer, increasing the friction ($f_m > 1.0$).
+\[
+\rho(\phi)=\rho_w+\phi(\rho_p-\rho_w).
+\]
 
-## 3. Mechanism of the "Trumpet" Effect (Downstream Widening)
-The rheological feedback is the primary driver of the observed geometric asymmetry (the "trumpet" profile). The mechanism is detailed as follows:
+The conduit area and the conservative suspended-solid variable are
 
-1. **Spatial Accumulation:** The concentration $\phi$ increases from upstream to downstream.
-2. **Friction Gradient:** The rheological multiplier increases downstream, raising the flow resistance.
-3. **Differential Stress:** The heightened friction generates a significantly higher local shear stress on the downstream walls compared to the upstream section.
-4. **Differential Erosion:** The conduit erodes more rapidly downstream, resulting in the flared geometric profile.
-5. **Regulation:** Once the downstream conduit is sufficiently widened, the fluid velocity drops locally, diluting the concentration and progressively reducing the erosion rate, thereby stabilizing the overall shape.
+\[
+A=\pi R^2,
+\qquad
+S=A\phi.
+\]
 
-## 4. Importance of the Spatial Scale
-The emergence of this effect is highly dependent on the fluid's **residence time** within the conduit.
-*   **Laboratory Scale (e.g., 10 cm):** Water traverses the conduit too rapidly to accumulate a significant sediment concentration. The fluid behaves essentially as clear water over the entire length, leading to perfectly cylindrical erosion.
-*   **Field Scale (e.g., 10 m):** The water has sufficient time to accumulate a substantial sediment load along its path, naturally triggering the rheological feedback loop without relying on unphysical morphological acceleration factors.
+Here `S` is the solid volume per unit axial length. The concentration used in
+the rheology is reconstructed from `phi=S/A`. This area-weighted formulation
+is required once the radius varies longitudinally or evolves in time.
 
-## 5. Influence of Particle Size
-The rheological parameter (based on Julien's model) is proportional to the square of the particle diameter ($d_p$).
-*   **Very Fine Particles (e.g., Silt/Clay, 20 µm):** The rheological effect remains negligible. The conduit erodes uniformly into a cylinder.
-*   **Coarse Particles (e.g., Fine Sand, 200 µm):** Larger grains generate significant dissipation. The feedback is strongly activated, creating the trumpet geometry.
+## 2. Hydrodynamics and erosion
 
-The code is architected to handle these varying spatial and granulometric scales in a completely physical and stable manner, enforced by strict time-step control (CFL).
+For the imposed pressure drop, the solver determines the quasi-steady
+constant discharge `Q`. The local velocity is
+
+\[
+u=Q/A.
+\]
+
+The Darcy-Weisbach wall stress is
+
+\[
+\tau_b=-\frac18 f_D\rho f_m u^2.
+\]
+
+The erosion mass flux is
+
+\[
+\dot m=k_{er}\max(|\tau_b|-\tau_c,0),
+\]
+
+and the radius evolves according to the strict radial law
+
+\[
+R_t=\frac{\dot m}{\rho_{soil,sat}}.
+\]
+
+There is no artificial morphological acceleration factor.
+
+## 3. Conservative solid transport
+
+The transported variable satisfies the area-conservative equation
+
+\[
+\frac{\partial S}{\partial t}
++\frac{\partial}{\partial x}(\beta u S)
+=\mathcal S_S.
+\]
+
+The area increment caused by erosion is
+
+\[
+\Delta A=A^{n+1}-A^n.
+\]
+
+The newly opened saturated soil carries its intact solid fraction, so the
+source update is
+
+\[
+\Delta S_{source}=\phi_{soil}\Delta A.
+\]
+
+This formulation is equivalent to a local concentration relaxation only in
+the special case where the area evolution and source are represented through
+\(\phi=S/A\). It additionally guarantees that the total suspended solid
+volume is tracked consistently as the conduit widens.
+
+## 4. Julien rheological feedback
+
+The raw Julien multiplier scales as
+
+\[
+f_{m,raw}-1
+\propto
+\left(\frac{d_p}{\ell_m}\right)^2
+\lambda(\phi)^n.
+\]
+
+It is converted into the effective multiplier used in the stress law through
+
+\[
+f_m=1+(f_{m,max}-1)
+\tanh\left(\frac{f_{m,raw}-1}{f_{m,max}-1}\right).
+\]
+
+Thus the suspension increases the hydraulic resistance downstream while the
+multiplier remains bounded and smoothly varying with the raw constitutive
+value.
+
+## 5. Emergence of the trumpet profile
+
+The downstream widening is not imposed as an initial condition or an
+explicit downstream source. It emerges through the following feedback:
+
+1. water enters with the prescribed inlet concentration;
+2. wall erosion injects solid volume into the conduit;
+3. the conservative variable `S=A*phi` is advected downstream;
+4. the concentration and the Julien multiplier increase where the solid load
+   accumulates;
+5. the larger multiplier increases local wall stress and erosion;
+6. the radius therefore grows faster in the downstream region;
+7. the larger area lowers the local velocity, providing a stabilising
+   hydraulic feedback.
+
+The particle diameter acts quadratically in the raw Julien coefficient. Larger
+particles therefore amplify the rheological feedback, while small particles
+can leave the multiplier close to unity. The domain length controls both the
+integrated pressure loss and the residence distance available for suspended
+solid accumulation.
+
+The one-dimensional validity indicator remains important: once `R_out/L`
+becomes large, the result should be interpreted as an extrapolation of the
+1D model rather than as a fully resolved three-dimensional conduit geometry.

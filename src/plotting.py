@@ -80,22 +80,47 @@ def parse_run_dir_name(name: str) -> Optional[Dict[str, object]]:
 
 
 def discover_run_records(outdir: Path) -> List[RunRecord]:
+    """Discover both campaign-style and reference-run output directories."""
     out = []
     for child in sorted(outdir.iterdir()):
         if not child.is_dir():
             continue
-        parsed = parse_run_dir_name(child.name)
-        if parsed is None:
-            continue
         req = [child / n for n in ["config.json", "results.csv", "snapshots.npz"]]
         if not all(p.exists() for p in req):
             continue
+
         with open(child / "config.json", "r", encoding="utf-8") as f:
             config = json.load(f)
         manifest_path = child / "run_manifest.json"
         metrics_path = child / "validation_metrics.json"
-        manifest = json.load(open(manifest_path, "r", encoding="utf-8")) if manifest_path.exists() else {}
-        metrics = json.load(open(metrics_path, "r", encoding="utf-8")) if metrics_path.exists() else {}
+        if manifest_path.exists():
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        else:
+            manifest = {}
+        if metrics_path.exists():
+            with open(metrics_path, "r", encoding="utf-8") as f:
+                metrics = json.load(f)
+        else:
+            metrics = {}
+
+        parsed = parse_run_dir_name(child.name)
+        if parsed is None:
+            # run_revision.py deliberately uses a human-readable scenario
+            # name rather than the matrix-campaign naming convention.  Its
+            # manifest contains enough metadata to expose the same record
+            # interface to the post-processing tools.
+            scenario = str(manifest.get("name", child.name))
+            version_core = str(manifest.get("version_core", "reference"))
+            parsed = {
+                "version_core": version_core,
+                "version_stage": f"{version_core}_long",
+                "stage": "long",
+                "scenario": scenario,
+                "nx": int(config.get("Nx", 0)),
+                "cfl": float(config.get("CFL", 0.0)),
+            }
+
         out.append(
             RunRecord(
                 run_dir=child,
