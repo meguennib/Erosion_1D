@@ -77,6 +77,18 @@ def fm_julien_raw(phi, p: Any):
     return 1.0 + coefficient * (lam ** p.julien_lambda_power)
 
 
+def fm_julien_from_raw(fm_raw, p: Any):
+    """Apply Julien's smooth active cap to a previously computed raw value."""
+    fm_max = float(p.fm_max)
+    if fm_max <= 1.0:
+        raise ValueError("fm_max must be strictly greater than 1")
+
+    fm_raw = np.asarray(fm_raw, dtype=float)
+    span = fm_max - 1.0
+    z = (fm_raw - 1.0) / span
+    return 1.0 + span * np.tanh(z)
+
+
 def fm_julien(phi, p: Any):
     """Return Julien's C1-smoothed, physically capped multiplier.
 
@@ -88,14 +100,7 @@ def fm_julien(phi, p: Any):
     ``1 <= fm < fm_max``.  The hyperbolic tangent is smooth; endpoint clips
     on ``phi`` remain separate numerical domain guards.
     """
-    fm_max = float(p.fm_max)
-    if fm_max <= 1.0:
-        raise ValueError("fm_max must be strictly greater than 1")
-
-    fm_raw = fm_julien_raw(phi, p)
-    span = fm_max - 1.0
-    z = (fm_raw - 1.0) / span
-    return 1.0 + span * np.tanh(z)
+    return fm_julien_from_raw(fm_julien_raw(phi, p), p)
 
 
 def shear_tau_b(rho, fw, fm, u):

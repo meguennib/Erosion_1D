@@ -67,3 +67,15 @@ python main.py
 The runner writes each case into `output_revision/` and records the effective
 transport variable, limiter, friction model, pressure residuals and validation
 metrics in the run manifest.
+
+## Performance profiling
+
+The hydraulic pressure residual is accelerated with optional Numba kernels.
+Profile a representative case with:
+
+```bash
+python tools/profile_simulation.py --nx 100 --t-end-factor 0.001
+```
+
+See [docs/performance.md](docs/performance.md) for the profiling results and
+the warm-up interpretation of the Numba timings.

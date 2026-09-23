@@ -5,18 +5,19 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
+from .kernels import (
+    NUMBA_AVAILABLE,
+    hydraulic_fields_kernel,
+    pressure_residual_kernel,
+)
 from .numerics import advection_conservative
 from .physics import (
-    barenblatt_fw,
-    beta_barenblatt,
     conservative_solid_source,
-    fm_julien,
+    fm_julien_from_raw,
     fm_julien_raw,
-    mdot_erosion,
     radius_growth_rate,
     rho_mix,
     rho_soil_sat,
-    shear_tau_b,
 )
 
 
@@ -86,47 +87,84 @@ def solve_Q_pressure_imposed(
 ) -> HydraulicState:
     """Solve the quasi-steady discharge for the imposed pressure drop.
 
-    For a trial discharge, the pressure loss is evaluated from the local
-    Darcy-Weisbach wall stress and the outlet minor loss.  A bracketed
-    bisection is used because the reference model requires a robust scalar
-    solve.  A failed bracket is a hard numerical failure; silently continuing
-    with an unsatisfied pressure residual would invalidate the physical run.
+    The pressure residual is the dominant inner-loop workload.  During
+    bisection only the scalar residual is required, so the accelerated kernel
+    computes no temporary field arrays.  The full hydraulic fields are
+    reconstructed once, after the accepted discharge has been found.
     """
-    R = np.asarray(R, dtype=float)
-    phi = np.asarray(phi, dtype=float)
+    R = np.ascontiguousarray(R, dtype=float)
+    phi = np.ascontiguousarray(phi, dtype=float)
     if R.ndim != 1 or phi.ndim != 1 or R.size != phi.size:
         raise ValueError("R and phi must be one-dimensional arrays of equal size")
     if dx <= 0.0:
         raise ValueError("dx must be strictly positive")
 
-    rho = rho_mix(phi, p.rho_w, p.rho_p)
-    fm_raw = fm_julien_raw(phi, p)
-    fm = fm_julien(phi, p)
+    rho = np.ascontiguousarray(rho_mix(phi, p.rho_w, p.rho_p), dtype=float)
+    fm_raw = np.ascontiguousarray(fm_julien_raw(phi, p), dtype=float)
+    fm = np.ascontiguousarray(fm_julien_from_raw(fm_raw, p), dtype=float)
 
-    def evaluate(Q: float):
-        Q = float(Q)
-        u = Q / (np.pi * R**2 + 1e-30)
-        Re = 2.0 * rho * np.abs(u) * R / p.mu_w
-        Re = np.maximum(Re, p.Re_min)
-        fw_loc = barenblatt_fw(Re)
-        beta_loc = beta_barenblatt(Re)
-        tau_b = shear_tau_b(rho, fw_loc, fm, u)
-        mdot = mdot_erosion(tau_b, p.tau_c, p.k_er)
-
-        px = (2.0 / np.maximum(R, p.R_min)) * tau_b
-        pL = (
-            p.Pin
-            + np.sum(px) * dx
-            - p.K_out * 0.5 * rho[-1] * (u[-1] ** 2)
+    def residual(Q: float) -> float:
+        return float(
+            pressure_residual_kernel(
+                R,
+                rho,
+                fm,
+                p.mu_w,
+                p.Re_min,
+                p.tau_c,
+                p.k_er,
+                p.Pin,
+                p.Pout,
+                p.K_out,
+                dx,
+                p.R_min,
+                float(Q),
+            )
         )
-        residual = float(pL - p.Pout)
-        result = (residual, tau_b, mdot, fw_loc, beta_loc, u, fm, fm_raw)
-        return result
+
+    def make_state(
+        Q: float,
+        residual_value: float,
+        n_expand: int,
+        n_bisect: int,
+        Q_low_value: float,
+        Q_high_value: float,
+    ) -> HydraulicState:
+        tau_b, mdot, fw, beta, u = hydraulic_fields_kernel(
+            R,
+            rho,
+            fm,
+            p.mu_w,
+            p.Re_min,
+            p.tau_c,
+            p.k_er,
+            p.R_min,
+            float(Q),
+        )
+        info = {
+            "bracket_found": True,
+            "used_fallback": False,
+            "n_expand": int(n_expand),
+            "n_bisect": int(n_bisect),
+            "residual_abs": abs(float(residual_value)),
+            "Q_low": float(Q_low_value),
+            "Q_high": float(Q_high_value),
+        }
+        evaluation = (
+            float(residual_value),
+            tau_b,
+            mdot,
+            fw,
+            beta,
+            u,
+            fm,
+            fm_raw,
+        )
+        return _state_from_evaluation(float(Q), evaluation, info)
 
     Q0 = max(float(Q_guess), 1e-12)
     Q_low = 0.0
-    eval_low = evaluate(1e-16)
-    r_low = float(eval_low[0])
+    r_low = residual(1e-16)
     if not np.isfinite(r_low):
         info = {
             "bracket_found": False,
@@ -140,28 +178,24 @@ def solve_Q_pressure_imposed(
         raise PressureSolveError("Non-finite pressure residual at Q=0", info)
 
     if abs(r_low) <= p.Q_tol_abs:
-        info = {
-            "bracket_found": True,
-            "used_fallback": False,
-            "n_expand": 0,
-            "n_bisect": 0,
-            "residual_abs": abs(r_low),
-            "Q_low": Q_low,
-            "Q_high": Q0,
-        }
-        return _state_from_evaluation(0.0, eval_low, info)
+        return make_state(
+            0.0,
+            r_low,
+            0,
+            0,
+            Q_low,
+            Q0,
+        )
 
     Q_high = Q0
-    eval_high = evaluate(Q_high)
-    r_high = float(eval_high[0])
+    r_high = residual(Q_high)
     expansions = 0
     bracket_found = np.sign(r_low) != np.sign(r_high)
 
     while not bracket_found and expansions < int(p.Q_bracket_max_expand):
         Q_high *= float(p.Q_bracket_growth)
         expansions += 1
-        eval_high = evaluate(Q_high)
-        r_high = float(eval_high[0])
+        r_high = residual(Q_high)
         if not np.isfinite(r_high):
             break
         bracket_found = np.sign(r_low) != np.sign(r_high)
@@ -172,7 +206,7 @@ def solve_Q_pressure_imposed(
             "used_fallback": False,
             "n_expand": expansions,
             "n_bisect": 0,
-            "residual_abs": float(abs(r_high)) if np.isfinite(r_high) else float("inf"),
+            "residual_abs": abs(float(r_high)) if np.isfinite(r_high) else float("inf"),
             "Q_low": float(Q_low),
             "Q_high": float(Q_high),
         }
@@ -180,11 +214,10 @@ def solve_Q_pressure_imposed(
             "Could not bracket the imposed-pressure discharge", info
         )
 
-    last_eval = eval_high
+    last_residual = r_high
     for n_bisect in range(1, int(p.Q_bisect_max_iter) + 1):
         Q_mid = 0.5 * (Q_low + Q_high)
-        eval_mid = evaluate(Q_mid)
-        r_mid = float(eval_mid[0])
+        r_mid = residual(Q_mid)
         if not np.isfinite(r_mid):
             info = {
                 "bracket_found": True,
@@ -195,20 +228,20 @@ def solve_Q_pressure_imposed(
                 "Q_low": float(Q_low),
                 "Q_high": float(Q_high),
             }
-            raise PressureSolveError("Non-finite pressure residual during bisection", info)
+            raise PressureSolveError(
+                "Non-finite pressure residual during bisection", info
+            )
 
-        last_eval = eval_mid
+        last_residual = r_mid
         if abs(r_mid) <= p.Q_tol_abs:
-            info = {
-                "bracket_found": True,
-                "used_fallback": False,
-                "n_expand": expansions,
-                "n_bisect": n_bisect,
-                "residual_abs": abs(r_mid),
-                "Q_low": float(Q_low),
-                "Q_high": float(Q_high),
-            }
-            return _state_from_evaluation(Q_mid, eval_mid, info)
+            return make_state(
+                Q_mid,
+                r_mid,
+                expansions,
+                n_bisect,
+                Q_low,
+                Q_high,
+            )
 
         if np.sign(r_mid) == np.sign(r_low):
             Q_low = Q_mid
@@ -222,7 +255,7 @@ def solve_Q_pressure_imposed(
         "used_fallback": False,
         "n_expand": expansions,
         "n_bisect": int(p.Q_bisect_max_iter),
-        "residual_abs": abs(float(last_eval[0])),
+        "residual_abs": abs(float(last_residual)),
         "Q_low": float(Q_low),
         "Q_high": float(Q_high),
     }
@@ -264,6 +297,7 @@ def run_simulation(p, logger):
         "beta_model": "beta_barenblatt",
         "mixture_multiplier_model": "julien_tanh_capped",
         "pressure_solver": "bracketing_bisection",
+        "hydraulic_kernel_backend": "numba" if NUMBA_AVAILABLE else "numpy_python",
         "erosion_rate_definition": "R_t=mdot/rho_soil_sat",
     }
 
@@ -339,7 +373,8 @@ def run_simulation(p, logger):
     )
     logger.info(
         f"friction={effective_models['mixture_multiplier_model']} "
-        f"fm_max={p.fm_max:.6g} pressure_solver={effective_models['pressure_solver']}"
+        f"fm_max={p.fm_max:.6g} pressure_solver={effective_models['pressure_solver']} "
+        f"backend={effective_models['hydraulic_kernel_backend']}"
     )
 
     # Consume target t/ter=0 at the actual initial state.  This avoids the
