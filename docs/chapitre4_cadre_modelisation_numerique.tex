@@ -2199,10 +2199,17 @@ erreur \(L_\infty\) élevée sur le champ de concentration, alors même que les 
 \begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{figure4.png}
-\caption{Sensibilité au maillage et convergence spatiale des champs couplés. Les profils de pression et de
-rayon se superposent rapidement lorsque le maillage est raffiné ; l'écart sur la concentration en
-suspension reste localisé au niveau du front advectif, ce qui explique la persistance de la sensibilité en
-norme \(L_\infty\).}
+\caption{Sensibilité au maillage et convergence spatiale des champs couplés (campagne B,
+\(\Delta p = 3.33\) MPa, \(\kout = 500\), \(t/\ter = 1.0\)). Les trois premiers panneaux comparent les
+profils de pression, de rayon et de concentration pour \(N_x = 150\), \(300\) et \(600\) ; le quatrième
+donne, en échelle logarithmique, l'écart de concentration au maillage de référence (\(N_x = 600\)). Les
+profils de pression et de rayon se superposent à la résolution graphique, tandis que l'écart sur la
+concentration reste localisé au niveau du front advectif : en norme \(L_1\) il décroît de
+\(2.1\times10^{-3}\) à \(7.1\times10^{-4}\) lorsque le maillage double, suivant un ordre apparent proche de
+\(1.6\), alors qu'en norme \(L_\infty\) il reste du même ordre (\(4.2\times10^{-2}\) puis
+\(3.7\times10^{-2}\)). Cette dissociation entre les deux normes est la signature d'une erreur de
+\emph{position} du front plutôt que d'amplitude, et elle justifie l'avertissement du
+paragraphe~\ref{sec:fronts-convergence} sur l'usage de la norme \(L_\infty\) seule.}
 \label{fig:convergence-maillage}
 \end{figure}
 
@@ -2699,10 +2706,15 @@ faible et plus le profil de rayon tend vers une forme cylindrique.
 \begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{figure3.png}
-\caption{Profils spatiaux adimensionnels le long du conduit pour la configuration avec perte aval. De haut
-en bas : rayon normalisé \(R/R_0\), rapport de pression \(p/P_{\mathrm{in}}\), concentration relative
-\(\phi/\phisol\) et facteur de résistance du mélange \(f_m\). La ligne tiretée du premier panneau
-indique la limite de validité géométrique \(R/L = 0.05\) de l'approximation 1D.}
+\caption{Profils spatiaux adimensionnels le long du conduit pour la configuration avec perte aval
+(campagne B, \(\Delta p = 3.33\) MPa, \(\kout = 500\)), à \(t/\ter = 0\), \(0.5\) et \(1.0\). De haut en
+bas : rayon normalisé \(R/R_0\) (échelle logarithmique), rapport de pression \(p/P_{\mathrm{in}}\),
+concentration relative \(\phi/\phisol\) et facteur de résistance du mélange \(f_m\). Le front advectif de
+concentration et le coude qu'il imprime au profil de pression se déplacent ensemble vers l'aval, et
+l'élargissement du conduit reste concentré à l'aval du front. La limite de validité géométrique
+\(R/L = 0.05\) de l'approximation unidimensionnelle correspond à \(R/R_0 = 1667\) dans cette campagne :
+elle est donc très au-delà de la plage ici représentée, qui reste entièrement dans le domaine de
+validité.}
 \label{fig:profils-spatiaux}
 \end{figure}
 
