@@ -259,6 +259,8 @@ Pour le cas de référence de la campagne A, on obtient \(S_A \approx 6\times10^
 \eqref{eq:rapport-injection} de l'ordre de \(6\times10^{-5}\). L'apport de matière érodée modifie donc le
 bilan de volume de moins de \(10^{-4}\) : la simplification~\eqref{eq:continuite} est pleinement
 justifiée, à condition de conserver la source dans l'équation de transport de la phase solide.
+La figure~\ref{fig:conduit-1D} récapitule la géométrie retenue et les grandeurs qui viennent d'être
+définies.
 
 \begin{figure}[H]
 \centering
@@ -2194,7 +2196,9 @@ explique les deux observations apparemment contradictoires que l'on rencontre da
 convergence de modèles à front raide : d'une part, la décroissance régulière des erreurs \(L_1\)/\(L_2\)
 avec le raffinement, qui traduit la convergence au sens intégral ; d'autre part, la persistance d'une
 erreur \(L_\infty\) élevée sur le champ de concentration, alors même que les champs lisses
-(\(p\), \(R\)) convergent rapidement et régulièrement.
+(\(p\), \(R\)) convergent rapidement et régulièrement. C'est précisément ce que montre la
+figure~\ref{fig:convergence-maillage}, qui superpose les trois maillages et donne en outre, dans son
+dernier panneau, l'écart local au maillage de référence.
 
 \begin{figure}[H]
 \centering
@@ -2209,7 +2213,8 @@ concentration reste localisé au niveau du front advectif : en norme \(L_1\) il 
 \(1.6\), alors qu'en norme \(L_\infty\) il reste du même ordre (\(4.2\times10^{-2}\) puis
 \(3.7\times10^{-2}\)). Cette dissociation entre les deux normes est la signature d'une erreur de
 \emph{position} du front plutôt que d'amplitude, et elle justifie l'avertissement du
-paragraphe~\ref{sec:fronts-convergence} sur l'usage de la norme \(L_\infty\) seule.}
+tableau~\ref{tab:convergence-front} : la norme \(L_\infty\) seule ne peut pas servir d'indicateur unique
+de convergence pour un front capturé.}
 \label{fig:convergence-maillage}
 \end{figure}
 
@@ -2301,8 +2306,51 @@ résultat de validation le plus solide de ce chapitre : il porte simultanément 
 hydraulique~\eqref{eq:dw}, sur la loi d'érosion~\eqref{eq:erosion}, sur le traitement de la perte
 singulière aval~\eqref{eq:charge-aval} et sur le plafond~\eqref{eq:fmmax}. Il confirme également que le
 temps d'échec est, dans ce régime, fixé par la seule balance de charge et non par la résolution spatiale :
-les valeurs du tableau~\ref{tab:validation-campagneB} sont stables lorsque \(N_x\) passe de \(100\) à
-\(600\) cellules.
+la dispersion des valeurs du tableau~\ref{tab:validation-campagneB} reste inférieure à \(1.1\%\) lorsque
+\(N_x\) passe de \(100\) à \(600\) cellules, alors même que le profil local de concentration, lui, cesse
+d'être convergent au-delà de \(t/\ter \approx 1.6\) (paragraphe suivant).
+
+\paragraph{Contrepartie numérique du plafonnement.} Le plafond n'est pas neutre pour la qualité du
+front de concentration, et il faut le dire. Une fois que \(\phi\) sature sur une portion significative du
+conduit, le champ \(f_m\) sature à son tour et le front développe des oscillations dont l'amplitude
+\emph{croît avec le raffinement}. Le tableau~\ref{tab:front-cap} quantifie ce comportement au moyen de la
+variation totale de \(\phi/\phisol\), qui vaut \(1\) pour un saut raide monotone.
+
+\begin{table}[H]
+\centering
+\caption{Qualité du front de concentration selon le traitement du plafond (campagne B, \(\kout = 500\),
+\(t/\ter = 2.2\)). La variation totale de \(\phi/\phisol\) vaut \(1\) pour un saut raide monotone ;
+au-delà de \(1.5\), elle traduit des oscillations.}
+\label{tab:front-cap}
+\small
+\begin{tabular}{lcccl}
+\toprule
+Traitement du plafond & \(N_x = 150\) & \(N_x = 300\) & \(N_x = 600\) & dépendance au maillage \\
+\midrule
+Sans plafond & \(1.195\) & \(1.204\) & \(1.173\) & aucune (convergé) \\
+Minimum abrupt~\eqref{eq:fmmax} & \(2.589\) & \(4.379\) & \(5.168\) & croissante \\
+Plafond régularisé (\(\mathcal{C}^1\)) & \(2.857\) & \(4.453\) & \(5.694\) & croissante \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item L'objection selon laquelle un plafond dégraderait le front, formulée en faveur de la loi sans
+plafond, est donc fondée sur le plan local : c'est bien le plafonnement qui introduit les oscillations, et
+non l'inverse.
+\end{tablenotes}
+\end{table}
+
+Deux éléments bornent cependant la portée de cette réserve. D'une part, l'artefact est \emph{tardif} :
+jusqu'à \(t/\ter \approx 1.6\), l'indicateur reste indépendant du maillage (\(0.927\) à \(N_x = 300\)
+contre \(0.952\) à \(N_x = 600\)), et il ne s'en écarte qu'à partir de \(t/\ter \approx 1.7\)
+(\(1.173\) contre \(1.424\)), lorsque \(\phi\) sature. Les profils spatiaux ne doivent donc pas être
+interprétés au-delà de cet instant. D'autre part, l'artefact reste \emph{local} : il n'affecte pas les
+grandeurs intégrales qui portent la validation. Le temps d'échec reproduit les valeurs publiées avec une
+dispersion inférieure à \(1.1\%\) lorsque \(N_x\) varie de \(100\) à \(600\) cellules
+(tableau~\ref{tab:validation-campagneB}), et les rapports de retard induits par la résistance aval y sont
+reproduits à mieux de \(0.2\%\). Autrement dit, le plafond introduit une oscillation de la \emph{forme} du
+front dans le régime saturé, mais il ne compromet ni la \emph{cinétique} globale, qui est le résultat
+validé, ni les temps caractéristiques.
 
 \paragraph{Cohérence de la campagne A.} Pour mémoire, la même procédure appliquée à la campagne A
 reproduit les deux valeurs publiées : \(668\) s contre \(666\) s publiés pour la configuration libre
@@ -2692,7 +2740,10 @@ une sortie libre ; c'est cette convention qui reproduit les valeurs publiées
 
 La figure~\ref{fig:profils-spatiaux} présente l'évolution spatio-temporelle des quatre champs du modèle
 pour une configuration avec perte aval : rayon normalisé, pression relative, concentration relative et
-facteur de résistance du mélange. Deux structures se dégagent. D'une part, un front advectif raide de
+facteur de résistance du mélange. Les instants retenus sont volontairement antérieurs à
+\(t/\ter \approx 1.6\), seuil au-delà duquel le front de concentration cesse d'être convergent sous
+l'effet du plafonnement de \(f_m\) (section~\ref{sec:verif-fm}) : la figure décrit donc un régime
+effectivement interprétable. Deux structures se dégagent. D'une part, un front advectif raide de
 concentration se propage vers l'aval ; d'autre part, la localisation du gradient de pression et du
 maximum de contrainte pariétale coïncide avec la position de ce front. Cette coïncidence n'est pas fortuite :
 elle traduit le fait que la résistance du mélange, qui croît avec la concentration, modifie localement la

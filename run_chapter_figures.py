@@ -114,18 +114,28 @@ CAMPAGNE_B = dict(
 # (section 4.10.4, "une resistance aval ne peut que retarder l'instabilite").
 # K_out = 10 (perte moderee) ou 500 (perte forte, retenue par defaut).
 # RESERVE NUMERIQUE (a lire avant de changer ces instants)
-# Le plafond fm <= fm_max est applique dans le solveur, comme le veut
+#
+# Le plafond fm <= fm_max est applique dans le solveur, conformement a
 # l'equation publiee ; c'est ce qui permet de retrouver les temps d'echec
-# publies (mieux de 0.5 %). En contrepartie, une fois phi sature a phi_soil
-# sur une large portion du conduit (t/ter >~ 1.2 en campagne B), le champ fm
-# sature lui aussi et le front de concentration developpe des oscillations
-# dont l'amplitude CROIT avec le maillage (mesure de la variation totale de
-# phi/phi_soil a t/ter = 2.2 : 2.6 a Nx = 150, 4.4 a Nx = 300, 5.2 a Nx = 600,
-# contre ~1.2 dans tous les cas sans plafond). Ces oscillations sont un
-# artefact numerique, pas une structure physique. Les instants retenus
-# ci-dessous sont donc choisis AVANT cette saturation, la ou le front est
-# raide, monotone et convergé en maillage (TV = 0.385 a Nx = 300 contre
-# 0.387 a Nx = 600 a t/ter = 0.6).
+# publies a mieux de 0.5 %. En contrepartie, une fois phi sature a phi_soil
+# sur une portion significative du conduit, le champ fm sature a son tour et
+# le front de concentration developpe des oscillations dont l'amplitude CROIT
+# avec le maillage. Mesure de la variation totale de phi/phi_soil, qui vaut 1
+# pour un saut raide monotone :
+#
+#   t/ter   = 1.6 :  Nx=300 -> 0.927   Nx=600 -> 0.952   (converge, ecart 2.7 %)
+#   t/ter   = 1.7 :  Nx=300 -> 1.173   Nx=600 -> 1.424   (divergent, ecart 21 %)
+#   t/ter   = 2.2 :  Nx=150 -> 2.59    Nx=300 -> 4.38    Nx=600 -> 5.17
+#            (sans plafond, le meme indicateur vaut ~1.2 quel que soit le maillage)
+#
+# L'artefact est donc TARDIF (il apparaît entre t/ter = 1.6 et 1.7, quand phi
+# sature) et LOCAL (il ne compromet pas les grandeurs integrales : le temps
+# d'echec reste stable a mieux de 1.1 % pour Nx = 100 / 300 / 600, et les
+# rapports de retard par K_out = 500 sont reproduits a mieux de 0.2 %).
+#
+# Les instants retenus ci-dessous sont donc places AVANT le seuil, la ou le
+# front est raide, monotone et converge en maillage. Voir la section
+# "Contrepartie numerique du plafonnement" du chapitre 4 (tableau 4.12).
 FIG3_KOUT = 500.0
 FIG3_SNAPS = [0.0, 0.5, 1.0]
 FIG3_NX = 600
