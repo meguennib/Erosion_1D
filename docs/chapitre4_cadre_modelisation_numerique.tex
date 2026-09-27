@@ -1,0 +1,3081 @@
+%=====================================================================================
+%  CHAPITRE 4 -- Cadre de modelisation et strategie de resolution numerique
+%  Version complete et redigee, avec integration des notes
+%  "Derivation of the Navier-Stokes equations, and implications for groundwater flow"
+%
+%  FICHIERS GRAPHIQUES ATTENDUS dans le dossier du chapitre :
+%    figure1.png (schema du conduit)  figure2.png (boucle de couplage)
+%    figure3.png (profils spatiaux)   figure4.png (convergence de maillage)
+%  Retirer les deux environnements "vigilance" avant remise du manuscrit.
+%
+%  -----------------------------------------------------------------------------------
+%  A. INTEGRATION DES NOTES (5 insertions)
+%   I1  Bilan de masse 3D (div v = 0) -> contrainte globale d(Au)/dx = 0    [section 4.2.2]
+%   I2  Hierarchie des echelles et justification du quasi-statique            [section 4.3.4]
+%   I3  Reduction dimensionnelle du modele de Navier-Stokes                   [section 4.3]
+%   I4  Poiseuille / forme darcienne comme archetype de fermeture locale      [section 4.3.3]
+%   I5  Tableau des nombres sans dimension et criteres de validite            [section 4.3.5]
+%   Annexe A : chaine d'etablissement Cauchy -> Navier-Stokes -> Poiseuille -> Darcy
+%
+%  B. CORRECTIONS APPORTEES AU CHAPITRE D'ORIGINE
+%   T1  "equation de pression elliptique / methode de Poisson" -> quadrature + contrainte
+%       globale + solveur scalaire (4.3.2, 4.6.3, 4.7.1). Aucun Laplacien n'est resolu.
+%   T2  Ancienne section 2.4 (redondante) condensee : section 4.6 (organisation de
+%       l'algorithme) ; l'argumentaire de robustesse constitue la section 4.7.5.
+%   T3  "la dichotomie conserve l'encadrement comme Newton" -> reformule (4.7.5).
+%   T4  coefficient beta_u (vitesse de transport des particules) defini explicitement.
+%   T5  "globalement implicite" -> "hydraulique implicite + couplage sequentiel decale".
+%   T6  Nombre de Reynolds : rho du melange, coherent avec la fermeture de frottement.
+%   T7  phi_soil et parametres : tableau 4.5 par campagne (plus de valeur unique ambigue).
+%   T8  Limiteur : seuil de stabilite explicite (CFL <= 1/2), choix documente.
+%   T9  "1D inconditionnellement stable" -> stabilite conditionnelle, seuil quantifie.
+%   T10 Rapport d'injection : ecriture dimensionnellement correcte (section 4.2.2).
+%
+%  C. RESULTATS DE VERIFICATION AJOUTES AU CHAPITRE (tous reproductibles)
+%   V1  tau_b = R dP/(2L) : verifie a 1e-6 pres pour R/R0 = 1 a 10 (section 4.7.6).
+%   V2  Q proportionnel a R^(19/7) : pente log 2,714 (mesuree 2,714) (section 4.7.6).
+%   V3  t2 = t_er ln 2 = 658 s contre 666 s simule -> accord a 1 % (section 4.7.6).
+%   V4  Seuil du schema d'advection : CFL <= 1/2 sans predicteur, CFL <= 1 avec
+%       predicteur MUSCL-Hancock (section 4.8.4) -> justifie le reglage CFL = 0,35.
+%   V5  Loi asymptotique des erreurs sur un front capture : L1 ~ dx,
+%       L2 ~ dx^(1/2), L infini = constante = saut/8 (section 4.10.6).
+%   V6  Sensibilite a K_out : tableau 4.11 (t2 = 666 s pour K=0, 2,1e4 s pour K=10).
+%   V7  Loi f_m : le plafond est applique DANS le solveur. Non-regression de la campagne A
+%       (trois traitements du plafond -> t2 = 668,5 s identiques, f_m = 1,0001).
+%   V8  Sans plafond, la campagne B atteint f_m = 1,46e12, R_max = 179 R0 pour R_out = 3,5 R0
+%       et s'arrete sur R_break (artefact). Avec plafond (fm_max = 2000) : runs reguliers.
+%   V9  Validation croisee campagne B (Tab. 5 publie) : t_fail = 128,60 / 162,13 / 55,26 / 63,22 s
+%       contre 128,1 / 161,8 / 55,0 / 62,9 s publies -> ecart < 0,5 % sur 4 configurations ;
+%       facteurs de retard par K_out = 500 : x1,261 et x1,144 contre x1,263 et x1,144 publies.
+%   V10 Campagne A : 668 s contre 666 s publies (+0,4 %) ; 877,8 s contre 872 s (+0,7 %) pour la
+%       configuration avec resistance aval, qui correspond a K_out ~ 0,15 et NON a K_out = 10.
+%   V11 Perte d'entree K_in : t2 = 668 / 1937 / 2522 / 3096 / 4235 s pour K_in,tot = 0 / 1 / 1,5 / 2 / 3 ;
+%       tau_b0 = R0[Pin - K_in,tot rho u0^2/2]/(2L) verifie a 0,3 % (section 4.10, tab. 4.13).
+%
+%  D. POINTS DE VIGILANCE (encadres "vigilance" dans le texte)
+%   0. RESOLUS (ex-alertes 1 et 2) :
+%      - l'alerte sur t2 = 872 s pour K_out = 10 venait d'une confusion entre campagnes :
+%        les K_out eleves (10, 500) decrivent la campagne B (terrain), pas la campagne A.
+%        Campagne A avec resistance aval <=> K_out ~ 0,15 (mesure : 877,8 s contre 872 publies).
+%      - l'alerte sur le "maintien de l'emballement" malgre K_out = 500 venait de la loi f_m
+%        non plafonnee dans le solveur. Avec le plafond, le calcul atteint R_break en 162,1 s
+%        et la perte aval est auto-limitante (elle decroit en R^-4) : elle ne peut que retarder.
+%   1. Reste ouvert : la valeur de fm_max gouverne qualitativement la campagne B (2000 -> accord
+%      avec la publication ; 5 -> arret de l'erosion). A presenter comme parametre identifie.
+%   2. Autres points (parametres, unites de k_er, delta_t_max de la campagne B,
+%      d_p de la campagne B, criteres d'arret, limiteur unique) : voir
+%      docs/integration_notes_NS_chapitre.md, section 7.
+%=====================================================================================
+
+\documentclass[11pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{threeparttable}
+\geometry{margin=1in}
+\captionsetup{font=small}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0pt}
+
+% ---- Macros de notation ----
+\newcommand{\phisol}{\phi_{\mathrm{soil}}}
+\newcommand{\kout}{K_{\mathrm{out}}}
+\newcommand{\kin}{K_{\mathrm{in}}}
+\newcommand{\mdot}{\dot{m}}
+\newcommand{\ter}{{t_{er}}}
+\newcommand{\dt}{\Delta t}
+\newcommand{\Chat}{\hat{P}}
+\newcommand{\divg}{\nabla\!\cdot\!}
+\newcommand{\vx}{v_x}
+\newcommand{\Disc}{D_{\mathrm{num}}}
+% Encadre de vigilance : a retirer avant remise definitive du manuscrit
+\newenvironment{vigilance}{%
+  \begin{quote}\small\noindent\rule{\linewidth}{0.4pt}\par\vspace{3pt}%
+  \textbf{Note de vigilance --- \`a v\'erifier avant publication.}\par\vspace{2pt}}%
+  {\par\vspace{3pt}\noindent\rule{\linewidth}{0.4pt}\end{quote}}
+
+\begin{document}
+
+%=====================================================================================
+\chapter{Cadre de modélisation et stratégie de résolution numérique}
+\label{chap:cadre}
+%=====================================================================================
+
+\section{Positionnement du modèle d'ordre réduit}
+\label{sec:positionnement}
+
+L'érosion interne par renard hydraulique constitue un problème d'interaction complexe entre les
+sollicitations hydrauliques, l'érosion progressive des parois du conduit, le transport des particules
+détachées et l'évolution de la géométrie de la zone érodée. La représentation numérique de cette
+dynamique peut être abordée à différents niveaux de fidélité, depuis les modèles analytiques ou réduits
+jusqu'aux simulations multiphysiques tridimensionnelles à haute résolution. Dans ce contexte, le présent
+travail s'inscrit dans une démarche de modélisation d'ordre réduit, dont l'objectif n'est pas de
+reproduire l'ensemble des phénomènes tridimensionnels locaux, mais de représenter de manière cohérente
+les mécanismes dominants qui gouvernent l'évolution temporelle d'un conduit de renard hydraulique. Le
+modèle proposé vise ainsi à fournir un cadre de calcul suffisamment représentatif des interactions
+hydrauliques et érosives tout en conservant une complexité numérique compatible avec des simulations
+répétées.
+
+Cette orientation répond directement à la finalité recherchée : disposer d'un outil permettant
+d'explorer rapidement l'influence des paramètres du problème, d'examiner différents scénarios de
+conditions aux limites et d'identifier les régimes d'évolution susceptibles de conduire à une
+amplification de l'érosion. Les simulations tridimensionnelles de type CFD avec frontières mobiles,
+ainsi que les approches sans maillage telles que la méthode SPH, permettent certes une description plus
+détaillée des mécanismes locaux, mais leur coût de calcul limite leur utilisation dans des campagnes
+comportant de nombreux cas paramétriques. Le modèle d'ordre réduit constitue ainsi un niveau
+intermédiaire entre la description expérimentale du phénomène et les approches numériques de
+haute-fidélité : il conserve les rétroactions essentielles du système tout en offrant l'efficacité
+nécessaire aux études de criblage paramétrique, à l'analyse de sensibilité et à l'interprétation rapide
+des régimes transitoires.
+
+Dans cette perspective, le modèle développé s'inscrit dans la continuité des approches
+unidimensionnelles antérieures consacrées à la modélisation du piping, notamment les travaux de
+Lachouette et al.\ (2008, 2009), tout en introduisant une formulation spécifiquement orientée vers la
+résolution numérique sous pressions d'entrée et de sortie imposées, la prise en compte de la résistance
+du mélange dépendante de la concentration et une procédure explicite de vérification numérique.
+
+Une remarque préliminaire est nécessaire sur la nature de la réduction effectuée. Le caractère
+\og unidimensionnel \fg{} du modèle ne doit pas être confondu avec l'hypothèse d'un écoulement
+stationnaire, ni avec celle d'un problème sans inertie. La réduction opérée consiste à \emph{moyenner}
+les équations de la mécanique des fluides sur la section du conduit, puis à exploiter la séparation
+entre l'échelle de temps hydraulique et l'échelle de temps d'érosion. Le présent chapitre établit
+explicitement cette chaîne de réductions à la section~\ref{sec:reduction-ns} : bilan de masse
+tridimensionnel, bilan de quantité de mouvement, fermeture constitutive, puis dégénérescence
+quasi-statique. C'est à ce prix que les hypothèses du modèle deviennent vérifiables et que ses limites
+peuvent être quantifiées plutôt que postulées.
+
+%=====================================================================================
+\section{Hypothèses de réduction unidimensionnelle}
+\label{sec:hypotheses}
+%=====================================================================================
+
+La réduction du problème tridimensionnel à une formulation unidimensionnelle repose sur l'hypothèse
+fondamentale selon laquelle la dynamique de l'écoulement et du transport est principalement gouvernée
+par la direction longitudinale du conduit. Le domaine physique est ainsi représenté par un conduit
+préférentiel de longueur \(L\), décrit par une coordonnée axiale \(x \in [0, L]\), tandis que sa
+géométrie est caractérisée, à chaque position et à chaque instant, par un rayon effectif \(R(x,t)\). La
+section transversale correspondante est définie par
+\[
+A(x,t) = \pi R^2(x,t)
+\]
+et le débit est relié à la vitesse moyenne sur la section par
+\[
+Q(t) = A(x,t)\,u(x,t).
+\]
+
+Les principales variables du modèle sont ainsi le rayon \(R(x,t)\), la pression \(p(x,t)\), la vitesse
+moyenne \(u(x,t)\) et la fraction volumique de solides en suspension \(\phi(x,t)\). Cette représentation
+suppose explicitement que les variables hydrauliques et de transport peuvent être décrites par des
+grandeurs moyennes sur chaque section, sans résolution directe de leur distribution radiale. Cette
+approximation implique plusieurs hypothèses structurantes. Premièrement, une seule valeur effective du
+rayon est attribuée à chaque abscisse longitudinale. La section du conduit est donc ramenée à une
+géométrie circulaire équivalente, ce qui permet d'exprimer directement les grandeurs hydrauliques en
+fonction de \(R\). Deuxièmement, l'écoulement et la concentration sont considérés sous leur forme
+moyennée sur la section, de sorte que les variations transversales ne sont pas résolues explicitement.
+Troisièmement, la dynamique dominante est supposée longitudinale, les phénomènes bidimensionnels ou
+tridimensionnels étant volontairement exclus de la formulation. Enfin, le mélange eau--particules est
+traité dans le cadre d'une approximation de suspension diluée, avec une masse volumique effective
+définie par
+\begin{equation}
+\rho(\phi) = \rho_w + (\rho_p - \rho_w)\phi,
+\label{eq:rho-mix}
+\end{equation}
+où \(\rho_w\) et \(\rho_p\) désignent respectivement les masses volumiques de l'eau et des particules.
+
+\subsection{Validité géométrique de la réduction}
+
+La validité de cette réduction est liée à l'élancement du conduit. Dans le modèle, l'approximation
+unidimensionnelle est considérée acceptable lorsque le diamètre demeure faible devant la longueur, avec
+la condition
+\begin{equation}
+\frac{D}{L} < 0.1,
+\qquad\text{soit de manière équivalente}\qquad
+\frac{R}{L} < 0.05 .
+\label{eq:validite-1D}
+\end{equation}
+Cette condition traduit le caractère quasi-filiforme du conduit et limite l'importance des effets
+transversaux qui ne sont pas représentés dans le modèle. Lorsque le rayon augmente au point de dépasser
+cette limite, les effets d'entrée, les zones de séparation et plus généralement les mécanismes
+bidimensionnels deviennent susceptibles de modifier significativement la structure de l'écoulement. Dans
+cette situation, les lois de fermeture hydrauliques adoptées dans la formulation 1D ne peuvent plus être
+considérées comme quantitativement représentatives. Les résultats obtenus au-delà de cette limite
+géométrique, notamment dans les régimes de croissance rapide du conduit, doivent par conséquent être
+interprétés comme des indicateurs qualitatifs de l'instabilité plutôt que comme une description
+quantitative de la phase terminale du phénomène.
+
+Il est essentiel de souligner que cette limite s'exprime en temps de simulation par un \emph{horizon}
+très concret. Pour la géométrie de référence de la campagne A (\(L = 0.117\) m, \(R_0 = 3\) mm), la
+condition~\eqref{eq:validite-1D} est vérifiée pour \(R < 5.85\) mm, soit \(R/R_0 < 1.95\) : la limite de
+validité quantitative est donc atteinte lorsque le rayon a simplement doublé. Toute grandeur extraite
+d'un calcul au-delà de cet horizon (rapports d'agrandissement, profils spatiaux, temps d'échec) doit
+être présentée comme un indicateur de régime et non comme une prédiction. Cette contrainte est reprise
+quantitativement à la section~\ref{sec:validite}.
+
+\subsection{Continuité hydraulique et bilan de masse}
+\label{sec:bilan-masse}
+
+Une seconde hypothèse importante concerne la continuité hydraulique. Bien que l'érosion constitue une
+source de matière dans l'écoulement, son effet direct sur le débit total est négligé dans l'équation de
+continuité :
+\begin{equation}
+\frac{\partial (Au)}{\partial x} = 0 .
+\label{eq:continuite}
+\end{equation}
+Cette simplification n'est pas une hypothèse indépendante : elle résulte de la moyenne de section de
+l'équation d'incompressibilité, comme établi à la section~\ref{sec:reduction-ns}. Le débit \(Q(t)\) est
+donc constant le long du conduit à chaque instant, tandis que l'érosion intervient essentiellement dans
+l'évolution de la géométrie et dans l'équation de transport de la phase solide.
+
+Sa justification quantitative repose sur la comparaison entre le débit volumique injecté par l'érosion
+et le débit transporté. Le terme source volumique par unité de longueur s'écrit
+\begin{equation}
+S_A = \frac{2\pi R\,\mdot}{\rho_s}
+\qquad \left[\mathrm{m^2\,s^{-1}}\right],
+\label{eq:source-vol}
+\end{equation}
+où \(\rho_s\) est la masse volumique apparente saturée du sol intact. Sa comparaison directe avec le
+débit \(Q\) (de dimension \(\mathrm{m^3\,s^{-1}}\)) n'est pas homogène : le rapport dépourvu de
+dimension est obtenu en intégrant la source sur la longueur du conduit,
+\begin{equation}
+\frac{\displaystyle\int_0^L S_A\,\mathrm{d}x}{Q}
+= \frac{2\pi R\,\mdot\,L}{\rho_s\,Q} .
+\label{eq:rapport-injection}
+\end{equation}
+Pour le cas de référence de la campagne A, on obtient \(S_A \approx 6\times10^{-8}\ \mathrm{m^2\,s^{-1}}\),
+\(Q \approx 1.3\times10^{-4}\ \mathrm{m^3\,s^{-1}}\), soit un rapport
+\eqref{eq:rapport-injection} de l'ordre de \(6\times10^{-5}\). L'apport de matière érodée modifie donc le
+bilan de volume de moins de \(10^{-4}\) : la simplification~\eqref{eq:continuite} est pleinement
+justifiée, à condition de conserver la source dans l'équation de transport de la phase solide.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{figure1.png}
+\caption{Représentation schématique du conduit effectif unidimensionnel : pressions imposées à
+l'entrée et à la sortie, vitesse moyenne \(u\), concentration en suspension \(\phi\), contrainte
+pariétale \(\tau_b\) et élargissement induit par l'érosion.}
+\label{fig:conduit-1D}
+\end{figure}
+
+\subsection{Hypothèses constitutives complémentaires}
+
+Enfin, la réduction adoptée s'accompagne d'hypothèses constitutives supplémentaires qui délimitent le
+domaine d'application du modèle :
+\begin{itemize}
+  \item \textbf{écoulement en conduite lisse} : la fermeture de frottement est de type conduite lisse,
+        sans rugosité évolutive ;
+  \item \textbf{loi d'érosion linéaire à seuil} : \(\mdot = k_{er}(\tau_b - \tau_c)\) pour
+        \(\tau_b > \tau_c\), et \(\mdot = 0\) sinon, sans mécanisme de dépôt ni d'armurage ;
+  \item \textbf{suspension diluée} : l'interaction entre particules est négligée dans la masse volumique
+        \eqref{eq:rho-mix} ; cette hypothèse est discutée au paragraphe~\ref{par:fm-plafond} ;
+  \item \textbf{absence de colmatage, d'armurage et de ségrégation granulométrique}.
+\end{itemize}
+Ces hypothèses ne constituent pas une description exhaustive de la physique du piping, mais les
+simplifications nécessaires à la construction d'un modèle d'ordre réduit destiné à identifier les
+mécanismes dominants et à explorer efficacement les régimes d'évolution du conduit.
+
+Cette réduction définit donc le niveau de description à partir duquel est construit le système couplé
+étudié dans la suite : l'hydraulique, l'érosion et le transport sont représentés au même niveau de
+moyennage longitudinal, tout en conservant les dépendances fonctionnelles nécessaires à la restitution
+de leur rétroaction mutuelle.
+
+%=====================================================================================
+\section{Réduction dimensionnelle du modèle de Navier--Stokes et nature des fermetures}
+\label{sec:reduction-ns}
+%=====================================================================================
+
+Le modèle unidimensionnel utilisé dans ce travail peut être présenté de deux manières. La première
+consiste à l'énoncer directement sous sa forme réduite, comme un système d'équations posé \emph{a
+priori}. La seconde, retenue ici, consiste à l'obtenir par une suite de réductions explicites à partir
+des équations de la mécanique des fluides. Cette seconde démarche présente un double intérêt : elle
+montre quelles hypothèses sont réellement mobilisées à chaque étape, et elle rend ces hypothèses
+quantifiables sous forme de nombres sans dimension. C'est cette quantification qui permet, à la
+section~\ref{sec:validite}, de délimiter précisément le domaine dans lequel les résultats du modèle
+conservent une valeur quantitative.
+
+\subsection{Du bilan de masse tridimensionnel à la contrainte globale de débit}
+\label{sec:div-v}
+
+Pour un fluide incompressible, la conservation de la masse s'écrit
+\begin{equation}
+\divg\vec{v} = \frac{\partial v_x}{\partial x} + \frac{\partial v_y}{\partial y}
++ \frac{\partial v_z}{\partial z} = 0 .
+\label{eq:div-v}
+\end{equation}
+Cette relation est purement cinématique : elle exprime que la masse d'un volume matériel est constante,
+ou, de manière équivalente, que le taux de variation relatif du volume d'une particule fluide est nul.
+Elle ne fait intervenir ni la rhéologie du fluide ni le détail de la géométrie interne du conduit. En
+particulier, elle reste valable quelle que soit la forme locale du champ de vitesse, y compris dans les
+zones de recirculation ou d'établissement.
+
+Intégrons~\eqref{eq:div-v} sur le volume de contrôle compris entre deux sections droites \(\Sigma(x)\) et
+\(\Sigma(x+\Delta x)\) normales à l'axe du conduit. En appliquant le théorème de la divergence, le
+résultat se réduit aux flux à travers les deux sections :
+\begin{equation}
+\int_{\Sigma(x)} v_x\,\mathrm{d}A = \int_{\Sigma(x+\Delta x)} v_x\,\mathrm{d}A .
+\label{eq:debit-conserve}
+\end{equation}
+En définissant la vitesse moyenne de section
+\begin{equation}
+u(x,t) = \frac{1}{A(x,t)}\int_{\Sigma(x)} v_x\,\mathrm{d}A,
+\label{eq:def-u}
+\end{equation}
+la relation~\eqref{eq:debit-conserve} devient \(A(x,t)u(x,t) = \) constante, c'est-à-dire exactement la
+forme~\eqref{eq:continuite} utilisée dans le modèle :
+\begin{equation}
+\frac{\partial (Au)}{\partial x} = 0
+\qquad\Longleftrightarrow\qquad
+Q(t) = A(x,t)\,u(x,t) .
+\label{eq:continuite-reduite}
+\end{equation}
+
+Trois conséquences méritent d'être soulignées. Premièrement, l'équation~\eqref{eq:continuite} n'est pas
+une hypothèse ajoutée au modèle : c'est la \emph{moyenne de section} de l'incompressibilité, la seule
+information perdue dans l'opération étant la répartition radiale de \(v_x\). Deuxièmement, la contrainte
+obtenue est \emph{globale} et non locale : le débit \(Q\) est une inconnue scalaire unique pour tout le
+conduit, et non un champ. Cette structure est directement responsable de l'organisation numérique
+retenue à la section~\ref{sec:hydraulique}, où \(Q\) est déterminé par une condition intégrale
+(la pression aval) plutôt que par une équation locale. Troisièmement, le fait que l'érosion ajoute de la
+matière aux parois ne contredit pas~\eqref{eq:div-v} : l'apport volumique est simplement négligeable
+devant le débit transporté, comme établi par~\eqref{eq:rapport-injection}.
+
+\subsection{Dégénérescence du bilan de quantité de mouvement}
+\label{sec:degenerescence}
+
+Le bilan de quantité de mouvement d'un fluide newtonien s'obtient en appliquant le principe fondamental
+de la dynamique à un élément fluide, dont la forme finale est l'équation de Navier--Stokes
+(dont l'établissement complet est rappelé en annexe) :
+\begin{equation}
+\rho\frac{D\vec{v}}{Dt} = -\rho g\,\vec{k} - \nabla P + \mu\,\nabla^2\vec{v},
+\label{eq:ns}
+\end{equation}
+où \(\frac{D}{Dt}=\frac{\partial}{\partial t}+\vec{v}\cdot\nabla\) désigne la dérivée matérielle, \(P\) la
+pression, \(\mu\) la viscosité dynamique et \(\vec{k}\) la verticale ascendante. Les quatre contributions
+sont respectivement la force d'inertie, le poids, la force de pression et la force visqueuse. Le passage
+à la formulation monodimensionnelle retenue dans ce travail s'effectue par trois réductions successives.
+
+\paragraph{Gravité et pression réduite.} En retranchant l'équation hydrostatique de l'équation de
+Navier--Stokes, le terme de gravité disparaît au profit de la pression réduite
+\(\Chat = P + \rho g z\) : seul le gradient de pression \emph{en excès} de l'hydrostatique met le fluide
+en mouvement. Le modèle de conduit horizontal n'a donc pas à traiter explicitement la pesanteur, ce qui
+justifie l'écriture du bilan sous la forme \(\partial p/\partial x = 2\tau_b/R\).
+
+\paragraph{Moyennage de section.} En supposant l'écoulement axisymétrique et en intégrant le bilan de
+quantité de mouvement sur la section, on obtient pour la composante axiale
+\begin{equation}
+\underbrace{\rho\left(\frac{\partial u}{\partial t} + u\frac{\partial u}{\partial x}\right)}_{\text{inertie}}
++ \frac{\partial p}{\partial x}
+= -\underbrace{\frac{2\tau_b}{R}}_{\text{frottement pariétal}},
+\label{eq:momentum-1D}
+\end{equation}
+où \(\tau_b\) est la contrainte de cisaillement exercée par la paroi sur le fluide. Le terme visqueux
+volumique a été converti en une contrainte pariétale : c'est cette opération qui introduit la nécessité
+d'une \emph{fermeture}, c'est-à-dire d'une relation reliant \(\tau_b\) au champ de vitesse moyen.
+
+\paragraph{Annulation du terme inertiel en géométrie uniforme.} Si la géométrie est uniforme le long du
+conduit, alors \(A\) et donc \(u = Q/A\) sont indépendants de \(x\) : le terme convectif
+\(u\,\partial u/\partial x\) est \emph{exactement} nul. Le caractère stationnaire en temps est une
+conséquence distincte, analysée au paragraphe~\ref{sec:echelles}. Sous ces deux conditions,
+l'équation~\eqref{eq:momentum-1D} dégénère en une relation locale exacte entre le gradient de pression
+et la contrainte pariétale :
+\begin{equation}
+\frac{\partial p}{\partial x} = -\frac{2\tau_b}{R},
+\qquad\text{soit, en valeur absolue,}\qquad
+\left|\frac{\partial p}{\partial x}\right| = \frac{2\tau_b}{R}.
+\label{eq:quasi-statique}
+\end{equation}
+Cette relation, qui constitue l'équation hydraulique fondamentale du modèle, a une conséquence numérique
+majeure. Le problème hydraulique n'est plus un problème de champ : la pression s'obtient par une simple
+\emph{quadrature} en espace,
+\begin{equation}
+p(x,t) = P_{\mathrm{in}} + \int_0^x \frac{2\tau_b(\xi,t)}{R(\xi,t)}\,\mathrm{d}\xi ,
+\label{eq:quadrature-p}
+\end{equation}
+et la seule inconnue restante est le scalaire \(Q(t)\), déterminé par la condition intégrale
+\(p(L,t) = p_{\mathrm{out}}(Q)\). Il n'y a donc, dans le modèle, ni inversion d'un opérateur
+différentiel spatial, ni résolution d'un système linéaire creux, ni itération de type Poisson : le
+problème de champ est remplacé par une quadrature et un problème scalaire de recherche de racine. Cette
+structure est exploitée directement à la section~\ref{sec:hydraulique}.
+
+\subsection{De la solution de Poiseuille à la forme darcienne : le rôle de la fermeture}
+\label{sec:poiseuille}
+
+L'équation~\eqref{eq:quasi-statique} ne constitue pas à elle seule une relation fermée : \(\tau_b\)
+dépend de l'écoulement. La manière dont cette fermeture est construite détermine entièrement la nature
+du modèle, et il est instructif de la construire d'abord dans le cas le plus simple, celui du régime
+visqueux rampant.
+
+\paragraph{Cas rampant : la solution de Poiseuille.} Pour un écoulement laminaire établi dans un tube
+circulaire de rayon \(R\), en négligeant le terme inertiel (hypothèse justifiée lorsque le nombre de
+Reynolds est très inférieur à l'unité), l'équation de Navier--Stokes se réduit à l'équilibre entre le
+gradient de pression réduite et la diffusion visqueuse. La résolution avec la condition de non-glissement
+à la paroi donne le profil parabolique
+\begin{equation}
+v_x(r) = \frac{1}{4\mu}\frac{\mathrm{d}\Chat}{\mathrm{d}x}\left(r^2 - R^2\right),
+\label{eq:poiseuille}
+\end{equation}
+et, en intégrant sur la section, le débit volumique
+\begin{equation}
+Q = -\frac{\pi R^4}{8\mu}\frac{\mathrm{d}\Chat}{\mathrm{d}x}
+\qquad\Longrightarrow\qquad
+q = \frac{Q}{\pi R^2} = -\frac{R^2}{8\mu}\frac{\mathrm{d}\Chat}{\mathrm{d}x}.
+\label{eq:poiseuille-q}
+\end{equation}
+En introduisant la charge hydraulique \(\Chat = \rho g h\), cette dernière relation prend exactement la
+forme de la loi de Darcy,
+\begin{equation}
+q = -K\frac{\mathrm{d}h}{\mathrm{d}s},
+\qquad
+K = \frac{\rho g R^2}{8\mu} .
+\label{eq:darcy}
+\end{equation}
+Autrement dit, la perméabilité d'un milieu poreux idéalisé par un faisceau de conduits est une
+manifestation directe de la \emph{fermeture visqueuse} : la loi de Darcy est une loi de comportement,
+pas une loi fondamentale. La même structure se retrouve pour l'écoulement dans une fracture
+(\(q \propto -W^2\,\mathrm{d}\Chat/\mathrm{d}x\)) ou pour tout autre géométrie dont la solution locale
+est linéaire en vitesse. Ce résultat est instructif pour le modèle de piping, mais il doit être manipulé
+avec précaution.
+
+\paragraph{Dégénérescence attendue et changement de régime.} Les relations~\eqref{eq:poiseuille-q}
+et~\eqref{eq:darcy} montrent qu'une fermeture locale, résolue sur la géométrie du conduit, produit
+toujours une relation du type \og débit proportionnel à un gradient \fg{}. Deux régimes doivent
+néanmoins être distingués avec soin :
+\begin{itemize}
+  \item en régime \emph{laminaire} (\(Re \ll 1\)), la contrainte pariétale est linéaire en vitesse,
+        \(\tau_b = 4\mu u/R\), et le débit varie comme \(R^4\) à gradient imposé ;
+  \item en régime \emph{turbulent lisse} (\(Re \sim 10^3\)--\(10^5\)), la fermeture devient quadratique,
+        \(\tau_b \propto u^2\), et le débit varie comme \(R^{19/7}\) à pression imposée pour une loi de
+        Blasius. Cette puissance, qui peut paraître élevée, traduit le double effet de l'élargissement :
+        la section croît comme \(R^2\) et la vitesse accessible comme \(R^{5/7}\).
+\end{itemize}
+Le conduit de renard hydraulique relève du second régime : pour la configuration de référence,
+\(Re \approx 2.7\times10^4\). La fermeture retenue dans ce travail est donc de type Darcy--Weisbach,
+\begin{equation}
+\tau_b = -\frac{1}{8}f_D(Re)\,f_m(\phi)\,\rho(\phi)\,u|u|,
+\label{eq:dw}
+\end{equation}
+et non de type Poiseuille. La solution~\eqref{eq:poiseuille-q} n'est pas utilisée pour décrire le
+conduit : elle sert de \emph{gabarit structurel}, qui indique quelle opération est effectuée dans le
+modèle (remplacer un champ visqueux par une relation locale entre vitesse et contrainte) et pourquoi
+cette opération est légitime dès lors que le conduit est élancé. La justification empirique de la
+fermeture~\eqref{eq:dw} et de son facteur correctif \(f_m(\phi)\) est donnée à la
+section~\ref{sec:fermeture-hydraulique}.
+
+\subsection{Hiérarchie des échelles et caractère quasi-statique}
+\label{sec:echelles}
+
+La suppression du terme inertiel et du caractère instationnaire de l'équation~\eqref{eq:momentum-1D}
+repose sur une séparation d'échelles de temps qu'il convient de quantifier précisément. Trois échelles
+doivent être comparées à l'échelle d'évolution géométrique
+\begin{equation}
+\ter = \frac{2L\rho_s}{k_{er}\,\Delta p},
+\label{eq:ter}
+\end{equation}
+qui est le temps caractéristique d'érosion introduit par le modèle, et dont la
+section~\ref{sec:instabilite} montre qu'il constitue également le taux de croissance exact du régime
+d'emballement.
+
+\paragraph{Échelle convective.} Le temps de transit d'une particule fluide dans le conduit vaut
+\(\tau_h \sim L/u\). Pour le cas de référence (\(L = 0.117\) m, \(u \approx 4.5\) m/s), on trouve
+\(\tau_h \approx 2.6\times10^{-2}\) s, soit
+\begin{equation}
+\frac{\tau_h}{\ter} \sim 3\times10^{-5} .
+\label{eq:rapport-tau}
+\end{equation}
+La réponse hydraulique au sens \emph{advectif} est donc environ \(10^4\) fois plus rapide que
+l'évolution géométrique : à l'échelle d'un pas d'érosion, l'écoulement a atteint son régime établi.
+
+\paragraph{Échelle de propagation des ondes.} Une troisième échelle, souvent omise, est le temps de
+propagation d'une onde de pression, \(\tau_a \sim L/c\) où \(c\) est la célérité des ondes dans le
+fluide (\(\approx 1480\) m/s pour l'eau). Pour la même configuration, \(\tau_a \approx 8\times10^{-5}\) s,
+soit
+\begin{equation}
+\frac{\tau_a}{\ter} \sim 10^{-7} .
+\label{eq:rapport-ta}
+\end{equation}
+Cette seconde inégalité est décisive : elle garantit que la dynamique \emph{acoustique} est entièrement
+relaxée entre deux états d'érosion, et donc qu'aucune onde de pression transitoire ne peut se
+développer à l'échelle du calcul. Il est important de noter que c'est cette séparation acoustique, et
+non la seule topologie unidimensionnelle du domaine, qui autorise à traiter le champ de pression comme
+une quantité s'ajustant instantanément à l'état géométrique courant. La topologie 1D, quant à elle,
+facilite la résolution, mais ne dispenserait pas d'une résolution instationnaire si les échelles de
+temps étaient comparables.
+
+\paragraph{Portée pratique.} Ces deux inégalités étant vérifiées sur toute la plage de paramètres
+étudiée, la stratégie de résolution retenue est la suivante : à chaque état géométrique et de
+concentration, le champ hydraulique est recalculé comme un état d'équilibre instantané, tandis que les
+variables lentes \(R\) et \(\phi\) sont avancées en temps. La cohérence de ce traitement est contrôlée à
+chaque pas par le diagnostic d'effectivité CFL présenté à la section~\ref{sec:cfl-diagnostic}, qui est
+précisément le garde-fou permettant de détecter une éventuelle perte de la séparation d'échelles.
+
+\subsection{Nombres sans dimension et critères de validité}
+\label{sec:sansdim}
+
+En rassemblant les résultats des paragraphes précédents, les hypothèses du modèle se traduisent en un
+petit nombre de nombres sans dimension dont la valeur fixe le domaine de validité. Le
+tableau~\ref{tab:sansdim} les récapitule pour la configuration de référence de la campagne A
+(échelle laboratoire, \(L = 0.117\) m, \(R_0 = 3\) mm, \(\Delta p = 0.5\) m de colonne d'eau).
+
+\begin{table}[H]
+\centering
+\caption{Nombres sans dimension et critères de validité de la réduction unidimensionnelle. Les valeurs
+correspondent à l'état initial de la campagne A (\(u_0 \approx 4.5\) m/s, \(R_0 = 3\) mm).}
+\label{tab:sansdim}
+\small
+\begin{tabular}{lllll}
+\toprule
+Grandeur & Définition & Valeur & Critère & Rôle \\
+\midrule
+Nombre de Reynolds & \(Re = 2\rho u R/\mu_w\) & \(2.7\times10^{4}\) & \(\gg 2300\) & régime turbulent \\
+Élancement du conduit & \(R/L\) & \(0.026\) (initial) & \(< 0.05\) & validité 1D \\
+Rapport d'échelles convectif & \(\tau_h/\ter = L/(u\,\ter)\) & \(3\times10^{-5}\) & \(\ll 1\) & quasi-statique \\
+Rapport d'échelles acoustique & \(\tau_a/\ter = L/(c\,\ter)\) & \(10^{-7}\) & \(\ll 1\) & pression d'équilibre \\
+Longueur d'établissement & \(L_e/D\) & \(10\)--\(40\) & \(\ll L/D = 19.5\) & écoulement établi \\
+Inertie / frottement & \(8\,|\partial_x R|/f_D\) & \(0 \to \mathcal{O}(10)\) & \(\ll 1\) & géométrie graduelle \\
+Charge cinétique / charge motrice & \(\frac{1}{2}\rho u^2/\Delta p\) & \(2.1\) & \(\ll 1\) & effets d'entrée négligeables \\
+Supercriticité érosive & \(\tau_b/\tau_c\) & \(63\) & \(>1\) & érosion active \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Trois de ces critères ne sont pas satisfaits dans la configuration de référence et doivent donc être
+commentés sans détour :
+\begin{enumerate}
+  \item \textbf{Inertie / frottement.} Le rapport \(8|\partial_x R|/f_D\) est nul tant que la géométrie
+        reste uniforme, mais croît avec le gradient de rayon. Il quantifie la perte de validité de
+        l'équation~\eqref{eq:quasi-statique} lorsque le profil se creuse : une fois le conduit élargi de
+        manière non uniforme, le terme convectif n'est plus négligeable et la relation locale doit être
+        considérée comme approchée.
+  \item \textbf{Longueur d'établissement.} Pour un écoulement turbulent, la longueur nécessaire à
+        l'établissement du profil de vitesse est de l'ordre de \(10\) à \(40\) diamètres. Avec
+        \(L/D \approx 20\), le conduit de la campagne A est du même ordre que sa propre longueur
+        d'établissement : l'application d'une fermeture de conduite \emph{établie} sur toute la
+        longueur constitue une approximation, et non un résultat.
+  \item \textbf{Charge cinétique d'entrée.} La condition d'entrée du modèle, \(p(0,t) = P_{\mathrm{in}}\)
+        avec \(u(0,t) = Q/A_0\), suppose le fluide déjà en mouvement à la pression imposée. Or
+        l'accélération depuis le réservoir amont exige au minimum une charge cinétique
+        \(\frac{1}{2}\rho u^2\), dont la valeur dépasse ici la charge motrice disponible. Ce point est
+        analysé en détail au paragraphe~\ref{par:entree}.
+\end{enumerate}
+
+\subsection{Effets non représentés par la réduction}
+\label{sec:effets-non-representes}
+
+\paragraph{Effets d'entrée et échelle de la configuration.}
+\label{par:entree}
+La relation entre l'état de référence et la condition d'entrée mérite un examen quantitatif, car il
+conditionne l'interprétation des temps caractéristiques. Avec \(u_0 \approx 4.5\) m/s, la charge
+cinétique vaut \(u_0^2/2g \approx 1.04\) m, à comparer à la charge motrice imposée \(\Delta p/\rho_w g =
+0.5\) m. Autrement dit, l'énergie cinétique minimale que doit acquérir le fluide pour atteindre cette
+vitesse dépasse à elle seule la charge disponible ; de manière équivalente, la borne de Bernoulli
+frictionless \(u \le \sqrt{2\Delta p/\rho_w}\) donne \(3.13\) m/s, valeur inférieure à la vitesse
+calculée. La vitesse rapportée par le modèle n'est donc réalisable que si le fluide entre dans le conduit
+avec une charge supérieure à \(P_{\mathrm{in}}\), ce que la condition aux limites ne représente pas.
+
+L'ordre de grandeur de l'effet est facile à évaluer. En introduisant un coefficient de perte singulière
+d'entrée \(\kin\) dans le bilan de charge,
+\begin{equation}
+\Delta p = \underbrace{\frac{f_D\,\rho\,u^2\,L}{4R}}_{\text{frottement réparti}}
++ \underbrace{\kin\,\frac{1}{2}\rho u^2}_{\text{perte d'entrée}},
+\label{eq:charge-entree}
+\end{equation}
+l'application numérique pour \(\kin = 0.5\) (entrée à arête vive) conduit à \(u = 3.1\) m/s au lieu de
+\(4.5\) m/s, soit une réduction de \(31\%\) du débit et de \(49\%\) de la contrainte pariétale
+\(\tau_b\). La simulation couplée confirme cet ordre de grandeur : \(u_0 = 3.17\) m/s
+(\(-30\%\)) et \(\tau_{b,0} = 30.7\) Pa (\(-51\%\)), pour un temps de doublement porté de \(668\) à
+\(1330\) s (\emph{cf.} section~\ref{sec:kin}). Comme \(\ter \propto 1/(\tau_b-\tau_c)\), les temps d'érosion varient dans le même rapport :
+la représentation des effets d'entrée n'est donc pas un raffinement, c'est une question de premier
+ordre. Deux choix sont possibles et doivent être explicités : soit introduire \(\kin\) dans le résidu
+hydraulique, par symétrie exacte avec \(\kout\) (section~\ref{sec:residu}), soit interpréter
+\(P_{\mathrm{in}}\) comme la pression \emph{interne} au conduit, mesurée après la zone d'entrée, et le
+justifier expérimentalement.
+
+\paragraph{Inertie convective et gradients de géométrie.} Le terme \(\rho u\,\partial u/\partial x\)
+n'est rigoureusement nul que pour une géométrie uniforme. Sa contribution relative au frottement
+s'écrit, en utilisant \(u = Q/(\pi R^2)\),
+\begin{equation}
+\frac{\left|\rho u\,\partial_x u\right|}{\left|2\tau_b/R\right|}
+= \frac{8\,|\partial_x R|}{f_D}.
+\label{eq:inertie-frottement}
+\end{equation}
+Cette relation fournit un critère simple : le modèle reste quasi-statique tant que
+\(|\partial_x R| \ll f_D/8 \approx 3\times10^{-3}\). Comme le profil de rayon s'écarte rapidement de
+l'uniformité dans les régimes d'emballement, ce critère constitue, avec \(R/L < 0.05\), la seconde
+condition de validité à surveiller.
+
+\paragraph{Retour sur la nature du problème hydraulique.} Les paragraphes précédents permettent de
+préciser une question souvent formulée de manière ambiguë. Le fait que l'écoulement soit confiné et
+quasi-1D n'implique pas que le champ de pression soit gouverné par une équation de Poisson. Une équation
+de Poisson est une équation \emph{tridimensionnelle} qui exprime le bilan local de masse et requiert, à
+chaque instant, une inversion globale du champ. Dans la réduction retenue ici, cette inversion n'a pas
+lieu : la relation~\eqref{eq:div-v} a déjà été intégrée en une contrainte globale sur \(Q\), et le champ
+de pression est reconstruit par la quadrature~\eqref{eq:quadrature-p}. Formellement :
+\begin{itemize}
+  \item ce qui subsiste de l'équation de continuité est une \emph{contrainte scalaire} (\eqref{eq:continuite}),
+        et non une équation aux dérivées partielles ;
+  \item le champ de pression n'est pas la solution d'un problème aux limites du second ordre, mais
+        l'intégrale d'une relation locale~;
+  \item l'information globale (la condition de pression aval) est portée par une \emph{unique} inconnue
+        scalaire \(Q\), traitée par recherche de racine.
+\end{itemize}
+L'analogie avec la théorie des écoulements souterrains se situe donc à un autre niveau : les solutions de
+Poiseuille et de Darcy rappellent que la \emph{fermeture locale} (relation vitesse--contrainte) est
+l'élément qui remplace l'opérateur de diffusion dans la description réduite. C'est bien cette fermeture,
+et non le caractère elliptique du problème 3D d'origine, qui subsiste dans le modèle 1D.
+
+
+%=====================================================================================
+\section{Structure du couplage hydraulique--érosion--transport}
+\label{sec:couplage}
+%=====================================================================================
+
+La formulation adoptée repose sur un couplage bidirectionnel entre les processus hydrauliques, l'érosion
+de la paroi du conduit et le transport des matériaux détachés. Les différentes équations ne constituent
+pas des sous-modèles indépendants : les variables produites par chacune d'elles interviennent directement
+dans les autres, de sorte que l'état du système à un instant donné résulte d'une succession de
+rétroactions locales et globales. La figure~\ref{fig:boucle} représente cette organisation sous la forme
+d'une boucle : la différence de pression imposée détermine le débit et la vitesse d'écoulement ; la
+vitesse contrôle la contrainte de cisaillement exercée sur la paroi ; cette contrainte gouverne l'érosion
+et l'agrandissement du conduit ; les matériaux érodés alimentent le champ de concentration en suspension ;
+à son tour, cette concentration modifie les propriétés hydrauliques du mélange et réintroduit son effet
+dans la détermination de l'écoulement.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{figure2.png}
+\caption{Structure de rétroaction du modèle couplé : hydraulique, frottement du mélange, érosion,
+évolution géométrique et transport en suspension.}
+\label{fig:boucle}
+\end{figure}
+
+\subsection{Premier maillon : le problème hydraulique}
+
+À chaque instant, l'état géométrique du conduit, défini par \(R(x,t)\), ainsi que la concentration locale
+\(\phi(x,t)\), déterminent la section \(A = \pi R^2\), la masse volumique du mélange~\eqref{eq:rho-mix} et
+le facteur de résistance du mélange \(f_m(\phi)\). La fermeture de type Darcy--Weisbach~\eqref{eq:dw}
+relie alors la contrainte pariétale à la vitesse moyenne. Le nombre de Reynolds,
+\begin{equation}
+Re = \frac{2\,\rho(\phi)\,u\,R}{\mu_w},
+\label{eq:re}
+\end{equation}
+fixe le facteur de frottement de Darcy \(f_D\), tandis que \(f_m\) traduit l'effet de la concentration des
+particules sur la résistance à l'écoulement. Le modèle réalise ainsi un premier couplage entre le
+transport des particules et la mécanique de l'écoulement. Le choix de la masse volumique du \emph{mélange}
+(dans~\eqref{eq:re}, et non de l'eau seule) est cohérent avec la fermeture~\eqref{eq:dw}, où \(\rho(\phi)\)
+apparaît également : le nombre de Reynolds et la contrainte pariétale font alors intervenir la même
+densité effective.
+
+\subsection{Deuxième maillon : la loi d'érosion}
+
+La contrainte pariétale issue du premier maillon est comparée à une contrainte critique \(\tau_c\). Le flux
+massique de matière détachée est donné par la loi à seuil
+\begin{equation}
+\mdot =
+\begin{cases}
+k_{er}\left(|\tau_b| - \tau_c\right), & |\tau_b| > \tau_c,\\[2mm]
+0, & |\tau_b| \le \tau_c,
+\end{cases}
+\label{eq:erosion}
+\end{equation}
+où \(k_{er}\) est le coefficient d'érosion. Cette relation introduit une non-linéarité fondamentale :
+tant que la contrainte hydraulique demeure inférieure à la valeur critique, aucune érosion n'est produite ;
+lorsque le seuil est franchi, le taux d'érosion croît linéairement avec l'excès de contrainte. Le flux
+érodé est ensuite converti en évolution géométrique par
+\begin{equation}
+\frac{\partial R}{\partial t} = \frac{\mdot}{\rho_s}\sqrt{1+\left(\frac{\partial R}{\partial x}\right)^2},
+\label{eq:dRdt}
+\end{equation}
+où \(\rho_s\) représente la masse volumique apparente saturée du sol intact et où le facteur
+\(\sqrt{1+(\partial_x R)^2}\) traduit la surface réelle de paroi par unité de longueur axiale. L'érosion
+agit donc directement sur la géométrie, et cette modification de \(R\) rétroagit immédiatement sur le
+problème hydraulique.
+
+Cette rétroaction géométrique est particulièrement importante dans les régimes à pression imposée. Une
+augmentation du rayon accroît la section disponible à l'écoulement et diminue la résistance hydraulique
+du conduit ; le débit nécessaire pour satisfaire les pressions imposées augmente alors, ce qui accroît la
+vitesse et la contrainte de cisaillement. Le mécanisme peut être schématisé par la chaîne
+\begin{equation}
+R \uparrow \;\Rightarrow\; \text{résistance} \downarrow \;\Rightarrow\; Q \uparrow \;\Rightarrow\;
+u \uparrow \;\Rightarrow\; \tau_b \uparrow \;\Rightarrow\; \mdot \uparrow \;\Rightarrow\; R \uparrow .
+\label{eq:retro-positive}
+\end{equation}
+Le modèle contient ainsi, de manière structurelle, une rétroaction positive susceptible de conduire à une
+amplification rapide de l'érosion. La section~\ref{sec:instabilite} montre que cette boucle admet une
+traduction analytique exacte en géométrie uniforme, et que le régime d'emballement est une propriété de la
+\emph{condition aux limites} (pression imposée) et non de la loi d'érosion retenue.
+
+\subsection{Troisième maillon : le transport des matériaux érodés}
+
+La fraction volumique de solides en suspension \(\phi\) satisfait l'équation d'advection--relaxation
+\begin{equation}
+\frac{\partial\phi}{\partial t} + \frac{\partial(u\phi)}{\partial x} = k\left(\phisol - \phi\right),
+\qquad
+k = \frac{2\mdot}{R\,\rho_s},
+\label{eq:transport}
+\end{equation}
+où \(k\) traduit directement l'intensité locale de l'érosion. Toute augmentation de \(\mdot\) produite par
+le sous-modèle hydraulique se traduit par une augmentation de la source de particules dans l'équation de
+transport. À l'inverse, le champ de concentration produit par cette équation intervient de nouveau dans
+la fermeture hydraulique par l'intermédiaire de \(\rho(\phi)\) et de \(f_m(\phi)\).
+
+Le choix d'une source de type relaxation,
+\begin{equation}
+S_\phi = k\left(\phisol - \phi\right),
+\label{eq:source-phi}
+\end{equation}
+introduit un mécanisme de saturation : lorsque \(\phi \to \phisol\), la source tend vers zéro et
+l'accumulation de solides en suspension est bornée par la fraction solide du matériau intact. Ce mécanisme
+d'auto-limitation est absent d'une loi de source directe non saturante, qui autoriserait
+\(\phi > \phisol\) en l'absence de contrôle explicite.
+
+\subsection{Concurrence entre rétroaction géométrique et rétroaction résistive}
+
+Le système possède donc simultanément deux rétroactions de sens opposé. La première, géométrique, suit la
+chaîne~\eqref{eq:retro-positive} et amplifie l'érosion. La seconde, résistive, suit la chaîne
+\begin{equation}
+\mdot \uparrow \;\Rightarrow\; \phi \uparrow \;\Rightarrow\; \rho \uparrow,\; f_m \uparrow
+\;\Rightarrow\; \text{résistance hydraulique} \uparrow,\; Q \downarrow,\; \tau_b \downarrow,
+\label{eq:retro-negative}
+\end{equation}
+et tend à s'opposer à l'amplification. L'importance relative de ces deux mécanismes dépend de la
+géométrie, de l'échelle du conduit et de la granulométrie ; elle est quantifiée à la
+section~\ref{sec:fermeture-hydraulique} au moyen du paramètre \(f_m(\phi)\).
+
+Cette compétition explique également pourquoi la condition d'aval peut modifier substantiellement le
+comportement global : l'introduction d'une perte de charge supplémentaire à la sortie, représentée par
+\(\kout\), réduit le débit pour une différence de pression donnée et constitue une rétroaction négative
+\emph{externe}, qui s'ajoute à la rétroaction résistive interne. La section~\ref{sec:resultats} montre que
+cette résistance aval retarde l'agrandissement du conduit et repousse le moment où le seuil géométrique de
+validité est atteint, sans pour autant supprimer l'instabilité de fond.
+
+Il convient enfin de distinguer le couplage physique de sa traduction numérique. Le caractère couplé
+signifie ici que chaque état temporel est obtenu par une succession de mises à jour interdépendantes :
+l'état géométrique et la concentration définissent les propriétés hydrauliques ; la solution hydraulique
+fournit la contrainte pariétale ; celle-ci détermine l'érosion ; l'érosion modifie simultanément la
+géométrie et la source du transport. Le modèle referme donc la boucle de rétroaction à chaque pas de
+temps, selon la séquence détaillée à la section~\ref{sec:algo}.
+
+%=====================================================================================
+\section{Fermeture hydraulique et résistance du mélange}
+\label{sec:fermeture-hydraulique}
+%=====================================================================================
+
+\subsection{Contrainte pariétale et nombre de Reynolds}
+
+L'équation quasi-statique~\eqref{eq:quasi-statique} ne devient une relation fermée qu'une fois précisée la
+loi reliant \(\tau_b\) à l'écoulement. La fermeture retenue est de type Darcy--Weisbach,
+\begin{equation}
+\tau_b = -\frac{1}{8}f_D(Re)\,f_m(\phi)\,\rho(\phi)\,u|u|,
+\label{eq:dw2}
+\end{equation}
+où \(f_D\) est le facteur de frottement de Darcy de l'écoulement de référence, \(f_m(\phi)\) l'augmentation
+relative de résistance due aux particules, \(\rho(\phi)\) la masse volumique du mélange~\eqref{eq:rho-mix}
+et \(u\) la vitesse moyenne. Cette écriture distingue deux contributions : celle de la dynamique de
+l'écoulement, portée par \(f_D\), et celle de la concentration des particules, portée par \(f_m\).
+
+Le régime hydraulique est caractérisé par le nombre de Reynolds~\eqref{eq:re}, dans lequel le diamètre
+hydraulique vaut \(2R\), cohérent avec la représentation du conduit par une section circulaire de rayon
+effectif \(R\). Le facteur de frottement est calculé par une corrélation explicite de type conduite lisse.
+Le choix d'une corrélation explicite, plutôt que d'une relation implicite de type Colebrook, répond
+directement à la philosophie d'ordre réduit : dans une simulation transitoire comportant plusieurs milliers
+de recalculs hydrauliques, l'évaluation du frottement doit rester peu coûteuse. Deux options ont été
+utilisées dans ce travail :
+\begin{itemize}
+  \item une corrélation explicite de type Blasius, \(f_D = 0.3164\,Re^{-1/4}\), qui constitue
+        l'approximation de référence pour un conduit lisse en régime turbulent ;
+  \item une corrélation de type Barenblatt, fondée sur la loi de puissance en \(Re\) et valable sur une
+        plage de Reynolds plus étendue.
+\end{itemize}
+L'écart entre les deux fermetures est faible sur la plage explorée : à \(Re = 2.7\times10^{4}\), les deux
+corrélations donnent \(f_D = 0.0247\) et \(0.0246\), soit un écart inférieur à \(0.5\%\). Ce point doit être
+mentionné explicitement dans la présentation des résultats, car il garantit que les conclusions ne
+dépendent pas du choix de la corrélation. En revanche, la fermeture reste associée à l'hypothèse de
+conduite lisse : elle n'intègre ni rugosité évolutive, ni ségrégation granulométrique, ni transition vers
+un comportement viscoplastique.
+
+\subsection{Masse volumique du mélange}
+
+La concentration intervient une première fois dans la fermeture par l'intermédiaire de la masse volumique
+effective~\eqref{eq:rho-mix}. Cette loi de mélange linéaire correspond à l'approximation de suspension
+diluée : l'augmentation de la fraction volumique solide se traduit directement par une augmentation de la
+masse volumique apparente du fluide transporté. Pour une vitesse donnée, l'augmentation de \(\phi\) modifie
+donc directement le terme \(\rho(\phi)\,u|u|\) de la contrainte pariétale. Le champ de transport n'est pas
+une variable purement descriptive : il participe à la détermination de la réponse hydraulique.
+
+\subsection{Résistance supplémentaire du mélange}
+
+L'effet de la suspension sur la résistance hydraulique est représenté par un facteur multiplicatif
+\(f_m(\phi)\) qui croît avec la concentration et devient singulier lorsque \(\phi\) tend vers la fraction
+solide du sol intact. Le modèle met en œuvre une forme de type Julien, construite sur la longueur de
+mélange \(l_m\) et sur la concentration relative,
+\begin{equation}
+f_m(\phi) = \min\left[f_{m,\max},\;
+1 + C_B\,\frac{\rho_p}{\rho(\phi)}\left(\frac{d_p}{l_m}\right)^{2}\lambda(\phi)^{n_\lambda}\right],
+\qquad
+\lambda(\phi) = \left[\left(\frac{\phisol}{\phi}\right)^{1/3}-1\right]^{-1},
+\label{eq:fm}
+\end{equation}
+avec \(l_m = C_r R\) (ou, dans une variante simplifiée, \(l_m = C_r R_0\)), \(d_p\) le diamètre
+caractéristique des particules, \(C_B\) le coefficient dispersif, \(C_r\) le coefficient de longueur de
+mélange et \(n_\lambda\) l'exposant de concentration. La fonction \(\lambda(\phi)\) est celle qui décrit
+l'accroissement de la dissipation collisionnelle lorsque l'empilement granulaire se densifie ; elle diverge
+lorsque \(\phi \to \phisol\), ce qui exprime physiquement la transition vers un comportement de pâte.
+
+Deux propriétés de cette fermeture doivent être soulignées avec précision, car elles conditionnent la
+lisibilité des résultats.
+
+\paragraph{Dépendance quadratique en diamètre.} Le terme \((d_p/l_m)^2\) rend la rétroaction rhéologique
+extrêmement sensible à la granulométrie. À titre d'illustration, pour une même concentration relative
+\(\phi/\phisol = 0.6\), le facteur \(f_m\) passe de \(1.0\)--\(1.1\) pour un silt fin (\(d_p \approx 20\)
+\si{\micro m}) à plusieurs unités pour un sable fin (\(d_p \approx 200\ \si{\micro m}\)). Autrement dit,
+la compétition décrite à la section~\ref{sec:couplage} n'est significative que pour des matériaux
+suffisamment grossiers. Pour un sol silto-argileux fin, la rétroaction résistive interne est
+essentiellement inactive et la dynamique est contrôlée par la seule rétroaction
+géométrique~\eqref{eq:retro-positive}, modulée par la condition d'aval.
+
+\paragraph{Plafonnement et limite de validité.}
+\label{par:fm-plafond}
+La présence du minimum dans~\eqref{eq:fm} n'est pas un simple artifice numérique. Sans limitation, la
+fermeture devient singulière lorsque \(\phi \to \phisol\), puisque \(\lambda \to +\infty\). Le modèle adopte
+donc
+\begin{equation}
+f_m \le f_{m,\max},
+\label{eq:fmmax}
+\end{equation}
+valeur qui doit être présentée à la fois comme un dispositif de régularisation et comme une limite
+physique de la fermeture : lorsque la concentration devient suffisamment importante, l'hypothèse d'un
+mélange assimilable à un écoulement turbulent newtonien cesse d'être pertinente et un comportement de type
+pâte viscoplastique peut apparaître.
+
+Ce plafond est appliqué \emph{au sein du solveur}, et non en post-traitement des résultats : c'est lui qui
+est consommé à chaque pas par le calcul de la contrainte pariétale~\eqref{eq:dw} et par le résidu
+hydraulique~\eqref{eq:residu}. Ce point n'est pas un détail d'implémentation, car il change la nature du
+problème. En l'absence de plafond, la campagne B (matériau grossier, \(d_p = 1\) mm) conduit à
+\(f_m \sim 10^{12}\) dans une zone étroite du conduit : le gradient de résistance locale qui en résulte
+concentre l'érosion en un pic isolé, le rayon maximal dépasse alors le rayon de sortie de plus d'un facteur
+cinquante, et le calcul s'interrompt sur le critère de sécurité \(R_{\mathrm{break}}\). Le plafond supprime
+ce pic, rétablit un champ de résistance régulier et rend au contraire la comparaison avec les temps publiés
+possible (section~\ref{sec:verif-fm}).
+
+Le caractère actif ou non de ce plafond doit être documenté pour chaque configuration étudiée, en
+indiquant explicitement la valeur maximale de \(f_m\) atteinte au cours du calcul. Deux situations
+distinctes peuvent se présenter : soit le plafond n'est jamais atteint, et la fermeture reste dans son
+domaine de validité asymptotique ; soit il est atteint, et l'interprétation des résultats doit être
+limitée au régime où la fermeture reste valable. Cette distinction est essentielle pour l'interprétation
+des simulations de forte érosion : attribuer au modèle une capacité prédictive illimitée lorsque \(\phi\)
+approche \(\phisol\) serait incorrect. Elle l'est d'autant plus que le plafond n'est pas une petite
+correction : la réponse de la campagne B en dépend qualitativement (section~\ref{sec:kout}).
+
+\paragraph{Cohérence entre les paramètres publiés et les paramètres simulés.} Le lecteur doit pouvoir
+retrouver, sans ambiguïté, la relation exacte utilisée et le jeu de paramètres associé. Le
+tableau~\ref{tab:param-campagnes} récapitule les deux campagnes de simulation exploitées dans ce travail,
+avec les valeurs effectivement utilisées pour chaque grandeur. Les valeurs de \(d_p\), \(C_B\), \(C_r\),
+\(n_\lambda\) et \(f_{m,\max}\) y figurent explicitement par campagne, et non comme des constantes
+globales, précisément parce que la nature de la rétroaction rhéologique en dépend.
+
+\begin{table}[H]
+\centering
+\caption{Paramètres des deux campagnes de simulation. Campagne A : échelle laboratoire, référence de
+type essai au trou (HET). Campagne B : échelle de terrain, gradient hydraulique élevé.}
+\label{tab:param-campagnes}
+\small
+\begin{tabular}{lccc}
+\toprule
+Paramètre & Symbole & Campagne A (laboratoire) & Campagne B (terrain) \\
+\midrule
+Longueur du conduit & \(L\) & \(0.117\) m & \(100\) m \\
+Rayon initial & \(R_0\) & \(3\) mm & \(3\) mm \\
+Pression d'entrée & \(P_{\mathrm{in}}\) & \(0.5\) m de colonne d'eau & \(3.33\) MPa \\
+Pression de sortie & \(P_{\mathrm{out}}\) & \(0\) Pa & \(0\) Pa \\
+Contrainte critique & \(\tau_c\) & \(1.0\) Pa & \(10\) Pa \\
+Coefficient d'érosion & \(k_{er}\) & \(1.0\times10^{-4}\ \mathrm{s/m}\) & \(1.0\times10^{-2}\ \mathrm{s/m}\) \\
+Masse volumique saturée & \(\rho_s\) & \(1990\ \mathrm{kg/m^3}\) & \(1850\ \mathrm{kg/m^3}\) \\
+Fraction solide du sol & \(\phisol\) & \(0.60\) & \(0.50\) \\
+Diamètre des particules & \(d_p\) & \(20\ \si{\micro m}\) & \(1.0\) mm \\
+Coefficient dispersif & \(C_B\) & \(0.2\) & \(0.01\) \\
+Coefficient de longueur de mélange & \(C_r\) & \(0.07\) & \(0.10\) \\
+Exposant de concentration & \(n_\lambda\) & \(2\) & \(2\) \\
+Plafond du facteur de résistance & \(f_{m,\max}\) & \(5\) & \(2000\) \\
+Temps caractéristique & \(\ter\) & \(949\) s & \(11.1\) s \\
+Nombre de cellules & \(N_x\) & \(300\), \(600\), \(1200\) & \(300\), \(600\) \\
+Limiteur du schéma & --- & van Leer / MC & van Leer / MC \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Les valeurs de \(\ter\) sont calculées par~\eqref{eq:ter}. Le coefficient \(k_{er}\) est exprimé en
+\(\mathrm{s/m}\), conformément à la loi~\eqref{eq:erosion} écrite en flux massique ; toute autre unité doit
+être convertie explicitement.
+\item Les paramètres \(d_p\), \(C_B\), \(C_r\), \(n_\lambda\) et \(f_{m,\max}\) sont ceux du
+code de calcul et sont donnés par campagne. Le calcul de référence de la campagne A utilise
+\(d_p = 75\ \si{\micro m}\) au lieu des \(20\ \si{\micro m}\) du sol étudié ; cette substitution est sans
+conséquence \emph{mesurable} sur cette configuration, car le facteur de résistance reste égal à \(1.000\)
+dans les deux cas (section~\ref{sec:verif-fm}) : la rétroaction rhéologique est inactive à l'échelle du
+laboratoire, quel que soit le matériau fin considéré.
+\end{tablenotes}
+\end{table}
+
+% TODO auteur : verifier que les valeurs de k_er, tau_c et rho_s des deux campagnes correspondent bien
+% aux fichiers de configuration effectivement utilises, et completer la ligne "limiteur" avec la valeur
+% unique retenue pour les resultats publies.
+
+
+%=====================================================================================
+\section{Organisation générale de l'algorithme de résolution}
+\label{sec:algo}
+%=====================================================================================
+
+La résolution numérique du modèle repose sur une succession d'étapes interdépendantes destinées à
+assurer, à chaque instant, la cohérence entre l'état hydraulique, l'état géométrique du conduit et l'état
+de transport des particules. L'organisation générale découle directement de la structure du couplage
+présentée à la section~\ref{sec:couplage} : à partir de la géométrie courante \(R(x,t)\) et du champ de
+concentration \(\phi(x,t)\), le problème hydraulique est résolu sous les conditions de pression imposées ;
+la solution obtenue permet d'évaluer la vitesse et la contrainte de cisaillement à la paroi ; ces grandeurs
+déterminent le taux d'érosion, qui contrôle simultanément l'évolution du rayon et l'alimentation du champ
+de particules en suspension. Le champ de concentration est ensuite transporté par l'écoulement et corrigé
+par l'intégration du terme source d'érosion.
+
+L'état du système à l'instant \(t^n\) peut être représenté par l'ensemble
+\begin{equation}
+\mathcal{S}^n = \left\{R_i^n, \phi_i^n\right\}_{i=1}^{N_x},
+\label{eq:etat}
+\end{equation}
+auquel s'ajoutent les grandeurs hydrauliques déduites de la résolution du problème, notamment
+\(Q^n, u_i^n, p_i^n, \tau_{b,i}^n, \rho_i^n\) et \(f_{m,i}^n\). L'objectif du pas de temps est de construire
+l'état suivant \(\mathcal{S}^{n+1}\), en respectant simultanément les conditions hydrauliques imposées, la
+conservation du transport et la loi locale d'érosion.
+
+\subsection{Décomposition séquentielle et nature du couplage}
+
+Avant de détailler chaque étape, il importe de préciser la nature exacte du couplage temporel, car
+plusieurs formulations sont possibles et la distinction a des conséquences sur la vérification.
+
+\begin{itemize}
+  \item \textbf{Le sous-problème hydraulique est implicite.} Pour un état \((R^n,\phi^n)\) donné, le débit
+        \(Q^n\) est obtenu par résolution d'une équation scalaire non linéaire dont le résidu dépend de
+        \(Q\) par l'intermédiaire de \(u\), \(Re\), \(f_D\) et \(\tau_b\). Il n'y a pas de linéarisation
+        lagrangienne du débit : la résolution est bien implicite dans ce sous-problème.
+  \item \textbf{Le couplage entre les trois sous-systèmes est séquentiel et décalé d'un pas.} L'érosion et
+        le transport au pas \(n\) sont évalués à partir de l'état hydraulique déterminé à la
+        \emph{fin} du pas précédent, puis la géométrie et la concentration sont avancées. Le schéma
+        global est donc du type \og résoudre l'hydraulique, puis avancer les variables lentes \fg{}, sans
+        sous-itération de convergence à l'intérieur du pas.
+\end{itemize}
+Cette distinction est importante pour l'interprétation de la vérification numérique. Si le schéma était
+entièrement implicite (avec itérations internes jusqu'à convergence), l'erreur de troncature temporelle
+serait dominée par les schémas d'advection et d'érosion. Dans la formulation retenue, il s'y ajoute une
+erreur de \emph{découplage}, proportionnelle au rapport entre le pas de temps et le temps de relaxation du
+sous-système hydraulique. La séparation d'échelles établie au paragraphe~\ref{sec:echelles}
+(\(\tau_h/\ter \sim 10^{-5}\)) garantit que cette erreur reste négligeable sur toute la plage étudiée, mais
+c'est cette garantie qui doit être vérifiée par le diagnostic CFL de la section~\ref{sec:cfl-diagnostic},
+et non postulée.
+
+\subsection{Initialisation de l'état du système}
+
+La simulation débute à partir d'une géométrie initiale prescrite \(R(x,0)\), d'un champ initial de
+concentration
+\begin{equation}
+\phi(x,0) = \phi_0(x),
+\label{eq:ci}
+\end{equation}
+ainsi que des paramètres hydrauliques et géotechniques du problème. Les pressions à l'entrée et à la
+sortie sont imposées par
+\begin{equation}
+p(0,t) = P_{\mathrm{in}},
+\qquad
+p(L,t) = P_{\mathrm{out}},
+\label{eq:cl}
+\end{equation}
+avec la possibilité d'introduire une perte de charge locale à l'exutoire au moyen de \(\kout\). La
+discrétisation spatiale fournit une grille de \(N_x\) cellules de largeur \(\Delta x = L/N_x\), et
+l'évolution temporelle est réalisée avec un pas \(\dt\) déterminé dynamiquement à partir d'une condition
+CFL, sous réserve des bornes \(\dt_{\min}\) et \(\dt_{\max}\).
+
+\subsection{Détermination du débit à partir des conditions de pression}
+\label{sec:debit-implicite}
+
+La première étape essentielle de chaque cycle consiste à déterminer \(Q^n\). Contrairement à une
+formulation à débit imposé, \(Q^n\) est une inconnue implicite : le champ hydraulique est intégré depuis
+l'entrée vers la sortie pour une valeur d'essai du débit, et le résidu scalaire
+\begin{equation}
+F(Q) = p_{\mathrm{calc}}(L; Q) - p_{\mathrm{out}}(Q)
+\label{eq:residu}
+\end{equation}
+est réduit à zéro. La forme précise de \(p_{\mathrm{out}}(Q)\), qui inclut la perte singulière
+\(\kout\frac{1}{2}\rho u^2(L)\) lorsque celle-ci est prise en compte, ainsi que la méthode de résolution,
+sont détaillées à la section~\ref{sec:hydraulique}. Le débit ainsi obtenu fournit les vitesses moyennes
+\begin{equation}
+u_i^n = \frac{Q^n}{A_i^n} = \frac{Q^n}{\pi (R_i^n)^2}.
+\label{eq:u-de-Q}
+\end{equation}
+Cette étape constitue le cœur du traitement des conditions de pression imposées : le débit doit être
+recalculé à chaque état d'évolution du conduit.
+
+\subsection{Évaluation des grandeurs hydrauliques et du taux d'érosion}
+
+Une fois le débit déterminé, les grandeurs locales nécessaires au calcul de l'érosion sont évaluées :
+masse volumique du mélange~\eqref{eq:rho-mix}, nombre de Reynolds~\eqref{eq:re}, facteur de frottement
+\(f_D\), facteur de mélange~\eqref{eq:fm} avec sa borne~\eqref{eq:fmmax}, puis contrainte pariétale
+\eqref{eq:dw2}. La contrainte est comparée à la contrainte critique et le flux massique érodé est évalué
+par~\eqref{eq:erosion}. Le coefficient local intervenant dans l'équation de transport est alors
+\begin{equation}
+k_i^n = \frac{2\mdot_i^n}{R_i^n\rho_s}.
+\label{eq:k-local}
+\end{equation}
+L'intérêt de cette organisation est que la source d'érosion n'est pas imposée indépendamment du calcul
+hydraulique : elle est une quantité dérivée de l'état hydraulique courant.
+
+\subsection{Détermination adaptative du pas de temps}
+\label{sec:dt-adaptatif}
+
+Le pas de temps est ensuite calculé à partir de la contrainte CFL
+\begin{equation}
+\dt = \max\left[\dt_{\min},\;
+\min\left(\frac{\mathrm{CFL}_{\mathrm{tgt}}\,\Delta x}{\max_i|a_i|},\;\dt_{\max}\right)\right],
+\label{eq:dt}
+\end{equation}
+où \(a_i\) est la vitesse utilisée pour le contrôle de la propagation advective et
+\(\mathrm{CFL}_{\mathrm{tgt}}\) le nombre de Courant visé. Deux vitesses caractéristiques doivent être
+distinguées, et leur confusion constitue une source d'erreur fréquente :
+\begin{itemize}
+  \item la vitesse du \emph{fluide} \(u = Q/A\), qui fixe le transport de la phase fluide ;
+  \item la vitesse de \emph{transport des particules} \(u_p = \beta_u\,u\), qui fixe la propagation de la
+        concentration \(\phi\) dans l'équation~\eqref{eq:transport}. Le coefficient \(\beta_u\) est le
+        rapport entre la vitesse moyenne des particules et celle du fluide ; il est égal à l'unité dans
+        l'hypothèse d'un transport purement advectif sans glissement, hypothèse retenue dans la suite, mais
+        il permet de représenter un éventuel retard des particules lorsque le modèle est étendu.
+\end{itemize}
+C'est la vitesse \(u_p\), et non \(u\), qui doit être utilisée dans le calcul du pas de temps
+advectif~\eqref{eq:dt}, puisque c'est elle qui gouverne la propagation du champ \(\phi\). La nécessité
+d'un recalcul à chaque pas provient du caractère fortement évolutif de l'écoulement : l'agrandissement du
+conduit modifie la section et la vitesse, tandis que l'évolution de la concentration modifie la résistance
+du mélange.
+
+\subsection{Avancement de l'équation de transport}
+
+La partie advective de l'équation~\eqref{eq:transport} est traitée séparément, par une méthode de volumes
+finis. Sur la grille, l'étape d'advection fournit un état intermédiaire
+\begin{equation}
+\phi_i^* = \phi_i^n - \frac{\dt}{\Delta x}\left(F_{i+1/2}^n - F_{i-1/2}^n\right),
+\label{eq:advection}
+\end{equation}
+où les flux d'interface sont construits par reconstruction MUSCL avec limiteur. Cette étape assure la
+conservation discrète de la quantité transportée tout en limitant les oscillations au voisinage des fronts
+de concentration raides. Sa construction détaillée, le choix du limiteur et les questions de positivité
+sont traités à la section~\ref{sec:transport}.
+
+\subsection{Intégration du terme source d'érosion}
+
+À l'issue de l'étape d'advection, le terme source est traité localement par séparation d'opérateurs. En
+considérant \(k\) constant pendant le pas \(\dt\), l'équation locale
+\begin{equation}
+\frac{\mathrm{d}\phi}{\mathrm{d}t} = k\left(\phisol - \phi\right)
+\label{eq:relax}
+\end{equation}
+possède la solution analytique exacte
+\begin{equation}
+\phi_i^{n+1} = \phisol - \left(\phisol - \phi_i^*\right)e^{-k_i^n\dt}.
+\label{eq:source-exacte}
+\end{equation}
+Cette opération présente l'avantage de traiter sans approximation temporelle la raideur locale de la
+relaxation pour \(k\) fixé, et de garantir que la concentration ne dépasse pas la limite \(\phisol\) dès
+lors que l'état issu de l'étape advective respecte lui-même les bornes admissibles. Ce point, qui n'est pas
+automatique, est discuté à la section~\ref{sec:source-erosion}.
+
+\subsection{Mise à jour de la géométrie}
+
+Parallèlement à l'évolution du transport, le taux d'érosion gouverne l'évolution du rayon
+par~\eqref{eq:dRdt}. La nouvelle géométrie \(R^{n+1}\) devient la géométrie de référence du cycle
+temporel suivant. Cette mise à jour est essentielle puisque le rayon intervient directement dans la
+section \(A = \pi R^2\), dans la vitesse \(u = Q/A\), dans le nombre de Reynolds et dans la relation liant
+la contrainte pariétale au gradient de pression. Il existe donc une dépendance cyclique explicite,
+\begin{equation}
+\left(R^n,\phi^n\right) \to \left(Q^n,u^n,\tau_b^n\right) \to \mdot^n
+\to \left(R^{n+1},\phi^{n+1}\right) \to \left(Q^{n+1},\dots\right),
+\label{eq:cycle}
+\end{equation}
+conformément à la structure de la boucle décrite à la section~\ref{sec:couplage}. Le décalage d'un pas
+entre l'état hydraulique utilisé et l'état géométrique produit correspond à l'erreur de découplage
+évoquée au paragraphe~\ref{sec:algo}.
+
+\subsection{Critères d'arrêt et contrôle de la validité géométrique}
+\label{sec:criteres-arret}
+
+Après chaque mise à jour, l'état courant est comparé aux critères d'arrêt de la simulation. Trois critères
+sont distingués, et leur nature doit rester claire dans l'interprétation des résultats :
+\begin{enumerate}
+  \item \textbf{critère de validité physique} : l'atteinte de la limite géométrique \(R/L = 0.05\)
+        introduite à la section~\ref{sec:hypotheses}. Au-delà, l'approximation 1D n'est plus
+        quantitativement valide ; l'arrêt signale une sortie de domaine, non un échec de calcul ;
+  \item \textbf{critère de sécurité numérique} : le dépassement d'un rayon maximal
+        \(R > R_{\mathrm{break}}\), qui interrompt le calcul avant que les quantités manipulées ne
+        sortent du domaine des nombres représentables ;
+  \item \textbf{critère de temps} : l'atteinte du temps final prescrit, exprimé en multiples de
+        \(\ter\).
+\end{enumerate}
+La distinction entre ces trois critères est indispensable lorsque l'on compare des simulations de
+configurations différentes. Un calcul peut en effet se terminer pour trois raisons de nature totalement
+distincte, et la valeur du rapport d'agrandissement atteint dépend directement du critère retenu. Le
+tableau de résultats doit donc toujours préciser lequel des trois critères a conduit à l'arrêt.
+
+Dans les simulations sans résistance aval, l'arrêt sur le critère de validité est interprété comme la
+manifestation du caractère instable de la configuration sous pression imposée, et non comme une divergence
+du solveur numérique. Cette lecture est renforcée par la section~\ref{sec:instabilite}, qui établit que
+l'amplification géométrique est structurelle et que son taux est prédictible analytiquement.
+
+\subsection{Algorithme général}
+
+La logique de calcul peut être synthétisée par la procédure suivante.
+
+\begin{enumerate}[label=\arabic*.]
+  \item Initialisation : \(R^0\), \(\phi^0\), \(t=0\), état \(\mathcal{S}^0\).
+  \item Calcul des propriétés locales du mélange (\(\rho\), \(f_m\), \dots) et du coefficient de
+        fermeture \(f_D\).
+  \item Résolution implicite du débit : \(F(Q)=0\) par encadrement puis dichotomie.
+  \item Calcul de \(u\), \(Re\), \(f_D\), \(\tau_b\) sur toutes les cellules.
+  \item Calcul du flux érodé \(\mdot\) et du coefficient de relaxation \(k\).
+  \item Calcul du pas de temps par la condition CFL, avec bornes \(\dt_{\min}\) et \(\dt_{\max}\).
+  \item Étape d'advection : volumes finis MUSCL avec limiteur.
+  \item Intégration analytique du terme source de relaxation.
+  \item Mise à jour de la géométrie \(R^{n+1}\).
+  \item \(t \leftarrow t+\dt\) ; contrôle des critères d'arrêt (validité, sécurité, temps).
+  \item Retour à l'étape 2.
+\end{enumerate}
+
+Cette organisation traduit la nature séquentielle du couplage. Elle ne repose pas sur une résolution
+monolithique de l'ensemble des équations, mais sur une décomposition structurée du problème multiphysique
+en sous-problèmes présentant chacun une méthode numérique appropriée : recherche de racine scalaire robuste
+pour l'hydraulique, schéma conservateur à haute résolution pour le transport, intégration exacte pour le
+terme source, avancement explicite pour la géométrie. Cette stratégie est cohérente avec l'objectif de
+construire un outil suffisamment robuste pour les études paramétriques et suffisamment contrôlable pour une
+analyse systématique de convergence.
+
+\begin{table}[H]
+\centering
+\caption{Récapitulatif des sous-problèmes et des méthodes numériques associées.}
+\label{tab:methodes}
+\small
+\begin{tabular}{llll}
+\toprule
+Sous-problème & Type & Inconnue & Méthode \\
+\midrule
+Hydraulique global & scalaire non linéaire & \(Q(t)\) & encadrement + dichotomie \\
+Champ de pression & quadrature spatiale & \(p(x,t)\) & intégration explicite \\
+Advection de \(\phi\) & hyperbolique conservatif & \(\phi(x,t)\) & volumes finis MUSCL--TVD \\
+Source d'érosion & relaxation locale raide & \(\phi(x,t)\) & intégration analytique exacte \\
+Géométrie & équation d'évolution locale & \(R(x,t)\) & Euler explicite (ordre 1) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% TODO auteur : preciser si la mise a jour de R est effectivement effectuee par un schema d'ordre 1
+% (Euler explicite) ou par un schema d'ordre superieur, et le mentionner dans l'analyse d'erreur.
+
+
+%=====================================================================================
+\section{Résolution du problème hydraulique sous conditions de pression imposées}
+\label{sec:hydraulique}
+%=====================================================================================
+
+Dans le modèle considéré, la résolution hydraulique a pour objectif de déterminer l'état d'écoulement
+compatible avec les conditions de pression prescrites aux deux extrémités du conduit. La spécificité de la
+formulation réside dans le fait que le débit constitue une inconnue du problème et doit être déterminé à
+partir des conditions aux limites plutôt que prescrit \emph{a priori}. Cette section expose successivement
+la formulation quasi-stationnaire et sa quadrature, la fermeture complète et le caractère non linéaire du
+gradient de pression, la formulation implicite du débit, l'algorithme de résolution, puis la justification
+de la robustesse et du coût de la méthode retenue.
+
+\subsection{Formulation quasi-stationnaire et quadrature du champ de pression}
+
+Comme établi au paragraphe~\ref{sec:echelles}, le rapport \(\tau_h/\ter \sim 10^{-5}\) et le rapport
+acoustique \(\tau_a/\ter \sim 10^{-7}\) sont tous deux très faibles. Il en résulte que, pour une géométrie
+et un état de concentration donnés, le champ hydraulique atteint son équilibre beaucoup plus rapidement
+que le conduit n'évolue sous l'effet de l'érosion : les termes transitoires associés à l'inertie de
+l'écoulement ne sont pas résolus explicitement dans la réponse hydraulique à chaque instant. L'équation
+de quantité de mouvement se réduit alors à l'équilibre local
+\begin{equation}
+\frac{\partial p}{\partial x} = \frac{2\tau_b}{R},
+\label{eq:quasi}
+\end{equation}
+où \(p(x,t)\) désigne la pression moyenne de section, \(R(x,t)\) le rayon effectif et \(\tau_b(x,t)\) la
+contrainte de cisaillement à la paroi.
+
+L'intérêt de cette formulation est de transformer le problème hydraulique en une relation différentielle
+spatiale intégrable le long du conduit à partir de la pression connue à l'entrée. En imposant
+\(p(0,t) = P_{\mathrm{in}}\), on obtient
+\begin{equation}
+p(x,t) = P_{\mathrm{in}} + \int_0^x \frac{2\tau_b(\xi,t)}{R(\xi,t)}\,\mathrm{d}\xi .
+\label{eq:quadrature}
+\end{equation}
+La distribution de pression résulte donc directement de l'intégration du bilan hydraulique longitudinal,
+et la condition imposée à l'extrémité aval intervient comme condition de fermeture du problème, ce qui
+conduit à la détermination implicite du débit présentée au paragraphe~\ref{sec:residu}.
+
+Cette formulation présente également un intérêt numérique important. Puisque l'écoulement est traité comme
+quasi-stationnaire, il n'est pas nécessaire de résoudre une équation temporelle supplémentaire pour la
+vitesse ou la pression entre deux états successifs du système : à chaque instant macroscopique \(t^n\), le
+champ hydraulique est recalculé à partir de l'état courant du conduit. Le problème temporel est ainsi
+porté par les variables lentes, le rayon \(R\) et la concentration \(\phi\), tandis que la pression et le
+débit sont des variables hydrauliques déterminées par l'état instantané du système. Comme souligné à la
+section~\ref{sec:effets-non-representes}, cette situation ne saurait être confondue avec la résolution
+d'une équation de type Poisson : l'équation de continuité a déjà été intégrée en une contrainte globale,
+et le champ de pression est obtenu par la quadrature~\eqref{eq:quadrature}, sans inversion d'opérateur
+différentiel spatial.
+
+\subsection{Fermeture complète et non-linéarité du gradient de pression}
+
+En substituant la fermeture~\eqref{eq:dw2} dans l'équation~\eqref{eq:quasi}, le gradient de pression
+s'écrit
+\begin{equation}
+\frac{\partial p}{\partial x}
+= -\frac{f_D(Re)\,f_m(\phi)\,\rho(\phi)}{4R}\,u\,|u|,
+\label{eq:dp-dx}
+\end{equation}
+relation dans laquelle la vitesse est elle-même reliée au débit par \(u(x,t) = Q(t)/\left[\pi R^2(x,t)\right]\).
+Cette écriture montre explicitement que le gradient de pression dépend simultanément de la géométrie, de
+la concentration et de la vitesse,
+\begin{equation}
+p_x = p_x\left(R,\phi,u\right),
+\qquad\text{avec}\qquad
+Q \to u \to Re \to f_D \to \tau_b \to \frac{\partial p}{\partial x},
+\label{eq:chaine-non-lineaire}
+\end{equation}
+chaîne à laquelle s'ajoute la dépendance en concentration
+\(\phi \to \rho(\phi), f_m(\phi) \to \tau_b \to \partial_x p\). Le débit ne peut donc pas être obtenu par
+une relation linéaire entre perte de charge et débit : il doit être recherché comme la valeur qui rend
+l'intégration de~\eqref{eq:dp-dx} compatible avec la condition de pression aval.
+
+Il est utile de distinguer les deux sources de non-linéarité, car elles n'ont pas la même nature :
+\begin{itemize}
+  \item une non-linéarité \emph{cinématique}, géométrique, provenant de \(u \propto Q/R^2\) et de la
+        dépendance \(f_D \propto Re^{-1/4}\) : elle existe même en fluide clair et en géométrie fixée ;
+  \item une non-linéarité \emph{rhéologique}, provenant de \(\rho(\phi)\) et surtout de \(f_m(\phi)\) qui
+        contient le terme \(\lambda(\phi)^{n_\lambda}\) divergente lorsque \(\phi \to \phisol\). Même si le
+        plafond~\eqref{eq:fmmax} borne la dépendance, celle-ci reste très raide à proximité de la limite de
+        concentration.
+\end{itemize}
+C'est la seconde qui motive le choix d'un solveur à convergence garantie plutôt qu'à convergence rapide,
+argument développé au paragraphe~\ref{sec:robustesse}.
+
+\subsection{Formulation implicite du débit}
+\label{sec:residu}
+
+À un instant donné \(t^n\), la géométrie \(R(x,t^n)\) et la concentration \(\phi(x,t^n)\) sont connues. Pour
+une valeur d'essai \(Q\), la vitesse est obtenue par la continuité,
+\begin{equation}
+u(x;Q) = \frac{Q}{\pi R^2(x)},
+\label{eq:uQ}
+\end{equation}
+puis le nombre de Reynolds et le facteur de frottement sont évalués sur chaque cellule. Le débit admissible
+est la racine du résidu scalaire
+\begin{equation}
+F(Q) = p_{\mathrm{calc}}(L;Q) - p_{\mathrm{out}}(Q) = 0,
+\label{eq:FQ}
+\end{equation}
+où la pression calculée à l'exutoire est donnée par la quadrature~\eqref{eq:quadrature} et où la pression
+de sortie \emph{imposée} doit tenir compte de la perte singulière lorsque celle-ci est représentée :
+\begin{equation}
+p_{\mathrm{out}}(Q) = P_{\mathrm{out}} + \kout\,\frac{1}{2}\rho(L)\,u(L;Q)^2 .
+\label{eq:pout}
+\end{equation}
+Deux configurations doivent être distinguées :
+\begin{itemize}
+  \item \(\kout = 0\) : la condition aval se réduit à \(p(L,t) = P_{\mathrm{out}}\) ; c'est le cas de
+        référence utilisé dans la plupart des simulations présentées ;
+  \item \(\kout \neq 0\) : la perte locale est intégrée au résidu. Cette configuration représente une
+        restriction, un filtre ou un contrôle aval, et joue le rôle de rétroaction négative externe
+        décrit à la section~\ref{sec:couplage}.
+\end{itemize}
+Le résidu peut être interprété directement comme une mesure d'incompatibilité entre la solution hydraulique
+produite par un débit d'essai et la condition de pression aval : \(F(Q)<0\) indique une pression calculée
+insuffisante, \(F(Q)=0\) une compatibilité, \(F(Q)>0\) une pression calculée excédentaire.
+
+Un point mérite d'être ajouté dans la perspective des effets d'entrée analysés au
+paragraphe~\ref{par:entree}. Par symétrie exacte avec~\eqref{eq:pout}, un coefficient de perte singulière
+d'entrée \(\kin\) peut être introduit en écrivant
+\begin{equation}
+p(0,t) = P_{\mathrm{in}} + \kin\,\frac{1}{2}\rho(0)\,u(0;Q)^2 ,
+\label{eq:pin}
+\end{equation}
+ce qui revient à modifier le résidu en
+\begin{equation}
+F(Q) = p_{\mathrm{calc}}(L;Q) - p_{\mathrm{out}}(Q)
++ \kin\,\frac{1}{2}\rho(0)\,u(0;Q)^2 .
+\label{eq:FQ-kin}
+\end{equation}
+L'introduction de ce terme ne change pas la structure du problème scalaire ni la nature du solveur, mais
+elle modifie la relation débit--pression et donc les temps d'érosion. Il est recommandé de l'introduire
+lorsque la charge cinétique d'entrée n'est pas négligeable devant la charge motrice, ce qui est
+précisément le cas pour les configurations à forte vitesse rapportées au tableau~\ref{tab:sansdim}.
+
+\subsection{Résolution par encadrement et dichotomie}
+\label{sec:bracketing}
+
+\paragraph{Principe de l'encadrement.} La première étape consiste à identifier deux valeurs de débit
+\(Q_a<Q_b\) telles que \(F(Q_a)F(Q_b)<0\). Sous hypothèse de continuité du résidu, cette condition garantit
+l'existence d'au moins une racine \(Q^*\in[Q_a,Q_b]\). En pratique, l'intervalle initial est élargi
+progressivement, par exemple par \(Q_b \leftarrow 2Q_b\), jusqu'à obtenir le changement de signe. La
+procédure ne dépend donc pas d'une estimation initiale précise du débit, ce qui est essentiel dans un
+contexte où \(Q\) varie de plusieurs ordres de grandeur au cours d'un même calcul.
+
+\paragraph{Itération de dichotomie.} Une fois l'intervalle établi, on calcule \(Q_m = (Q_a+Q_b)/2\) et on
+évalue \(F(Q_m)\). Si \(F(Q_a)F(Q_m)<0\), la racine reste dans \([Q_a,Q_m]\) ; sinon elle est dans
+\([Q_m,Q_b]\). L'opération est répétée jusqu'à satisfaction du critère d'arrêt. La largeur de l'intervalle
+décroît géométriquement,
+\begin{equation}
+\Delta Q^{(k)} = \frac{\Delta Q^{(0)}}{2^{k}},
+\label{eq:bisection-decay}
+\end{equation}
+de sorte que, après \(k\) itérations, l'erreur sur le débit est bornée par
+\begin{equation}
+\left|Q^{(k)}-Q^*\right| \le \frac{Q_b^{(0)}-Q_a^{(0)}}{2^{k+1}} .
+\label{eq:bisection-borne}
+\end{equation}
+Cette borne est une garantie \emph{a priori}, indépendante de la pente locale du résidu.
+
+\paragraph{Critère d'arrêt fondé sur la pression.} Le critère de résolution est exprimé directement en
+termes de pression,
+\begin{equation}
+\left|F(Q^{(k)})\right| = \left|p_{\mathrm{calc}}(L;Q^{(k)}) - p_{\mathrm{out}}(Q^{(k)})\right|
+\le \varepsilon_p ,
+\label{eq:tol-p}
+\end{equation}
+ce qui est cohérent avec la formulation du problème : la grandeur imposée à la frontière est la pression et
+non le débit. Le débit est la variable recherchée, la pression calculée à la sortie est la mesure de
+qualité de la solution. Ce critère en pression est complété en pratique par une borne sur l'intervalle
+\(Q_b-Q_a \le \varepsilon_Q\) et par un nombre maximal d'itérations, qui protègent le calcul contre les
+situations où la sensibilité \(\mathrm{d}p(L)/\mathrm{d}Q\) devient très faible en fin d'emballement ; ces
+garde-fous doivent être documentés car ils déterminent la précision effective du solveur en régime
+fortement érodé.
+
+\paragraph{Déroulement du solveur.} Le fonctionnement peut être résumé comme suit.
+\begin{enumerate}[label=\arabic*.]
+  \item Choisir un intervalle initial \([Q_a, Q_b]\).
+  \item Évaluer \(F(Q_a)\) et \(F(Q_b)\).
+  \item Si \(F(Q_a)F(Q_b) \ge 0\), élargir l'intervalle et répéter l'étape 2.
+  \item Calculer \(Q_m = (Q_a+Q_b)/2\) et évaluer \(F(Q_m)\).
+  \item Si \(|F(Q_m)| \le \varepsilon_p\) ou si les bornes d'intervalle sont atteintes, retourner \(Q_m\).
+  \item Sinon, conserver le sous-intervalle contenant la racine et répéter à partir de l'étape 4.
+\end{enumerate}
+
+\subsection{Monotonie du résidu et robustesse du solveur}
+\label{sec:robustesse}
+
+\paragraph{Monotonie.} Le caractère monotone de \(F(Q)\) sur la plage de paramètres étudiée constitue le
+fondement du choix de la méthode. Pour un état géométrique et un état de concentration fixés, une
+augmentation du débit accroît la vitesse, donc le nombre de Reynolds, le frottement et la contrainte
+pariétale, ce qui accroît la perte de charge totale et diminue la pression calculée à l'exutoire. Cette
+dépendance conduit à une variation monotone du résidu, ce qui garantit l'unicité de la racine encadrée.
+La propriété est vérifiée numériquement \emph{a posteriori} sur chaque calcul, en contrôlant que
+\(F(Q_a)\) et \(F(Q_b)\) restent de signes opposés avec \(F\) décroissante ; elle n'est pas postulée.
+
+\paragraph{Avantage fondamental de l'encadrement.} La propriété essentielle de la dichotomie est qu'elle
+conserve explicitement un intervalle contenant la racine, et cela \emph{par construction} et à chaque
+itération : l'algorithme ne dépend jamais d'une approximation locale de la fonction autour d'un point
+unique. À l'inverse, la méthode de Newton--Raphson repose sur le développement local
+\begin{equation}
+F(Q) \approx F(Q_n) + F'(Q_n)\left(Q-Q_n\right)
+\qquad\Longrightarrow\qquad
+Q_{n+1} = Q_n - \frac{F(Q_n)}{F'(Q_n)},
+\label{eq:newton}
+\end{equation}
+dont la convergence est quadratique lorsque les hypothèses locales sont favorables, mais qui n'offre aucune
+garantie \emph{a priori} en dehors de ces hypothèses. Il convient donc d'être précis : la dichotomie n'est
+pas plus rapide que Newton, et elle ne lui est pas supérieure dans l'absolu ; elle est préférable ici
+parce que la convergence par réduction d'intervalle est garantie dès que la racine est encadrée et le
+résidu continu, alors que la convergence de Newton dépend du comportement local de la fonction.
+
+\paragraph{Absence de dérivée.} Un avantage complémentaire est l'absence de toute évaluation de \(F'(Q)\).
+Dans le problème considéré, chaque évaluation de \(F\) implique déjà une intégration complète du champ
+hydraulique sur les \(N_x\) cellules. Une approximation numérique de la dérivée exigerait au moins une
+évaluation supplémentaire par itération,
+\begin{equation}
+F'(Q) \approx \frac{F(Q+\delta Q) - F(Q)}{\delta Q},
+\label{eq:derivee-num}
+\end{equation}
+et le choix de \(\delta Q\) deviendrait critique lorsque le résidu est très raide, c'est-à-dire précisément
+dans les régimes où le solveur doit rester fiable. La dichotomie n'introduit pas ce paramètre
+supplémentaire.
+
+\paragraph{Robustesse vis-à-vis de l'évolution du couplage.} Le problème hydraulique n'est pas résolu une
+seule fois : à chaque pas, le changement d'état \((R^n,\phi^n)\to(R^{n+1},\phi^{n+1})\) produit une nouvelle
+fonction de résidu \(F_n(Q) \to F_{n+1}(Q)\). Une méthode exigeant une excellente estimation initiale à
+chaque appel serait fragile ; une méthode à encadrement conserve un comportement contrôlé et reproductible
+à travers les transitions rapides. Cette propriété a une conséquence méthodologique importante : si le
+solveur hydraulique a un comportement contrôlé, alors une évolution brutale de \(R\) ou de \(\phi\) peut
+être attribuée aux équations physiques plutôt qu'à une convergence défaillante du calcul du débit. La
+distinction entre instabilité physique et échec numérique repose donc en partie sur la robustesse du
+solveur.
+
+\paragraph{Coût et compromis.} La contrepartie de la dichotomie est son coût : la convergence est
+linéaire, la largeur de l'intervalle étant divisée par deux à chaque itération, contre une convergence
+quadratique pour Newton dans des conditions favorables. Ce surcoût est explicitement accepté. Le solveur
+est appelé une fois par pas de temps, sur des milliers de pas, et sert également de brique de base aux
+études paramétriques ; la priorité est donc la fiabilité globale du calcul couplé plutôt que la
+minimisation du nombre d'itérations de chaque résolution individuelle. Un échec du solveur hydraulique
+interromprait l'ensemble de la chaîne de calcul, ce qui justifie ce compromis.
+
+\subsection{Un résultat analytique : emballement structurel et temps caractéristique}
+\label{sec:instabilite}
+
+La simplicité de l'équation~\eqref{eq:quasi} permet d'obtenir un résultat exact qui éclaire l'ensemble des
+résultats numériques et fournit un cas de vérification analytique. Considérons une géométrie uniforme,
+\(R(x,t) = R(t)\). L'équation~\eqref{eq:quasi} intégrée entre l'entrée et la sortie donne alors, en valeur
+absolue,
+\begin{equation}
+\frac{\Delta p}{L} = \frac{2\tau_b}{R}
+\qquad\Longrightarrow\qquad
+\tau_b(t) = \frac{\Delta p}{2L}\,R(t),
+\label{eq:tau-analytique}
+\end{equation}
+résultat remarquable par sa généralité : la contrainte pariétale est fixée par la géométrie et par la
+charge imposée, \emph{indépendamment de la loi de frottement}. La fermeture hydraulique ne détermine donc
+pas \(\tau_b\) mais le débit \(Q\) (et donc \(u\) et \(Re\)) qui permet de réaliser cette contrainte.
+Physiquement, si le conduit s'élargit, la résistance diminue et le débit augmente précisément de manière à
+maintenir la contrainte à la valeur imposée par le gradient de pression.
+
+En reportant~\eqref{eq:tau-analytique} dans la loi d'érosion~\eqref{eq:erosion} et
+l'équation~\eqref{eq:dRdt}, et en négligeant le facteur géométrique \(\sqrt{1+(\partial_xR)^2}\) pour une
+géométrie uniforme, on obtient une équation différentielle ordinaire linéaire en \(R\) :
+\begin{equation}
+\frac{\mathrm{d}R}{\mathrm{d}t}
+= \frac{k_{er}}{\rho_s}\left(\frac{\Delta p}{2L}R - \tau_c\right)
+\qquad\Longrightarrow\qquad
+R(t) = R_c + \left(R_0 - R_c\right)e^{t/\ter},
+\label{eq:R-exponentielle}
+\end{equation}
+avec
+\begin{equation}
+R_c = \frac{2L\tau_c}{\Delta p},
+\qquad
+\ter = \frac{2L\rho_s}{k_{er}\Delta p}.
+\label{eq:Rc-ter}
+\end{equation}
+Trois conséquences méritent d'être soulignées.
+
+\begin{enumerate}
+  \item \textbf{L'emballement est structurel.} Le taux de croissance est strictement positif tant que
+        \(R>\tau_c 2L/\Delta p\), et \(R\) croît exponentiellement sans borne finie. Il n'existe donc pas
+        de point fixe géométrique stable sous pression imposée en l'absence d'une résistance aval : le
+        régime d'emballement est la conséquence directe de la condition aux limites, et non de la
+        fermeture de frottement ni de la rhéologie du mélange. Ce résultat analytique justifie et
+        généralise l'observation numérique d'instabilité systématique.
+  \item \textbf{\(\ter\) est un taux de croissance, pas seulement une échelle de normalisation.} Le temps
+        de doublement du rayon vaut \(t_2 = \ter\ln 2\), indépendamment de \(R_0\) et de \(\tau_c\) dès
+        que \(R_0 \gg R_c\). Pour la configuration de la campagne A (\(\ter = 949.4\) s), on obtient
+        \(t_2 = 658\) s, à comparer aux \(665\) s obtenus par le calcul couplé complet : l'accord à
+        \(1\%\) valide simultanément l'implémentation du solveur hydraulique et la cohérence du temps
+        caractéristique retenu.
+  \item \textbf{Le rôle stabilisateur d'une résistance aval se lit directement.} Avec une perte singulière
+        \(\kout\), la contrainte pariétale devient \(\tau_b = R\left[\Delta p - \kout\frac{1}{2}\rho u^2\right]/(2L)\),
+        de sorte que l'augmentation du débit associée à l'élargissement produit une contre-pression :
+        c'est le mécanisme exact par lequel \(\kout>0\) ralentit l'érosion, retardant le temps de
+        doublement sans pour autant annuler la croissance à long terme.
+\end{enumerate}
+
+Deux confirmations numériques de ces relations méritent d'être mentionnées, car elles valident la
+reconstruction du modèle utilisée pour l'interprétation. D'une part, le calcul direct du champ hydraulique
+en géométrie uniforme vérifie la relation \eqref{eq:tau-analytique} à mieux de \(10^{-6}\) relatif pour
+tous les rayons testés (de \(R_0\) à \(10R_0\)), ce qui confirme l'indépendance de \(\tau_b\) vis-à-vis
+de la fermeture. D'autre part, le débit suit exactement la loi de puissance
+\(Q \propto R^{19/7}\) (pente logarithmique \(2.714\) à mieux de \(10^{-3}\) pour
+\(R/R_0 = 1.5\) à \(10\)), qui quantifie la force de la rétroaction \eqref{eq:retro-positive} : un
+doublement du rayon multiplie le débit par \(6.6\) et la contrainte pariétale par \(2\), ce qui explique
+la brutalité de l'emballement observé numériquement.
+
+Ce résultat fournit également un critère de vérification indépendant. Pour toute configuration à géométrie
+initialement uniforme, le calcul couplé doit reproduire (i) la contrainte analytique~\eqref{eq:tau-analytique}
+au premier pas et (ii) la loi exponentielle~\eqref{eq:R-exponentielle} pour l'intervalle pendant lequel la
+géométrie reste quasi uniforme. Le tableau~\ref{tab:verif-analytique} présente ce contrôle pour la
+configuration de référence.
+
+\begin{table}[H]
+\centering
+\caption{Vérification analytique de l'état initial et du taux de croissance. Comparaison entre la
+prédiction analytique~\eqref{eq:tau-analytique}--\eqref{eq:Rc-ter} et le calcul couplé, pour la
+configuration de la campagne A.}
+\label{tab:verif-analytique}
+\small
+\begin{tabular}{llrl}
+\toprule
+Grandeur & Expression analytique & Valeur analytique & Valeur calculée \\
+\midrule
+Vitesse initiale & \(u_0 = Q_0/(\pi R_0^2)\) & --- & \(4.5\) m/s \\
+Contrainte pariétale initiale & \(\tau_b = R_0\Delta p/(2L)\) & \(62.9\) Pa & \(62.9\) Pa \\
+Débit initial & \(Q_0\) & --- & \(1.3\times10^{-4}\ \mathrm{m^3/s}\) \\
+Temps de doublement & \(t_2 = \ter\ln 2\) & \(658\) s & \(665\) s \\
+Rayon critique & \(R_c = 2L\tau_c/\Delta p\) & \(0.048\) mm & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% TODO auteur : verifier la colonne "valeur calculee" a partir des sorties effectives (etat initial de
+% la simulation de reference) et completer la ligne du temps de doublement si la definition de t_2
+% differe (doublement du rayon a la section de sortie et non a l'entree).
+
+
+%=====================================================================================
+\section{Discrétisation numérique du transport advectif des particules}
+\label{sec:transport}
+%=====================================================================================
+
+La modélisation du transport des particules érodées constitue une composante déterminante du modèle
+couplé, car la concentration en solides \(\phi(x,t)\) intervient directement dans la modification des
+propriétés hydrauliques du mélange. Le transport est décrit par l'équation d'advection--relaxation
+\eqref{eq:transport}, dans laquelle le terme advectif assure la propagation longitudinale des particules
+tandis que le terme source traduit leur alimentation par l'érosion des parois. La résolution numérique de
+cette équation doit donc simultanément préserver la conservation de la quantité transportée et rester
+suffisamment précise au voisinage des gradients élevés susceptibles d'apparaître dans le champ de
+concentration.
+
+La difficulté numérique provient principalement du caractère fortement advectif du problème : les
+simulations mettent en évidence la formation de fronts de concentration abrupts se propageant vers l'aval
+du conduit. Ces fronts présentent des variations spatiales beaucoup plus rapides que celles observées dans
+les champs de pression ou de rayon et constituent, par conséquent, la principale contrainte pour la
+discrétisation spatiale. Le schéma retenu est une méthode conservative de volumes finis centrée sur les
+cellules, associée à une reconstruction MUSCL et à un limiteur de pente. Cette section établit la
+formulation conservative, développe la reconstruction MUSCL, précise le rôle du limiteur, puis compare le
+schéma retenu aux deux extrêmes que constituent le schéma amont du premier ordre et les reconstructions
+non limitées.
+
+\subsection{Formulation conservative et discrétisation par volumes finis}
+
+\paragraph{Structure conservative de l'équation.} La forme retenue pour le terme advectif est la forme
+conservative \(\partial(u\phi)/\partial x\), et non l'écriture développée \(u\,\partial\phi/\partial x\).
+Cette distinction est fondamentale pour la discrétisation. Pour un volume de contrôle
+\(C_i = [x_{i-1/2}, x_{i+1/2}]\), l'intégration de~\eqref{eq:transport} donne en effet
+\begin{equation}
+\frac{\mathrm{d}}{\mathrm{d}t}\int_{C_i}\phi\,\mathrm{d}x
++ (u\phi)_{i+1/2} - (u\phi)_{i-1/2}
+= \int_{C_i} k\left(\phisol-\phi\right)\mathrm{d}x .
+\label{eq:bilan-integral}
+\end{equation}
+Cette relation exprime directement le bilan sur la cellule : la variation de la quantité de solides
+contenue dans la cellule est déterminée par la différence entre les flux entrants et sortants, augmentée
+de la quantité produite localement par l'érosion. La conservation ne dépend donc pas d'une reconstruction
+artificielle d'une dérivée point par point ; elle résulte du bilan intégral, et le flux traversant une
+interface apparaît avec des signes opposés dans les bilans des deux cellules adjacentes.
+
+\paragraph{Discrétisation centrée sur les cellules.} Le domaine est subdivisé en \(N_x\) cellules de
+largeur \(\Delta x = L/N_x\), et l'inconnue \(\phi_i(t)\) est définie comme la moyenne cellulaire
+\begin{equation}
+\phi_i(t) = \frac{1}{\Delta x}\int_{x_{i-1/2}}^{x_{i+1/2}}\phi(x,t)\,\mathrm{d}x .
+\label{eq:moyenne-cellulaire}
+\end{equation}
+La forme semi-discrète s'écrit alors
+\begin{equation}
+\frac{\mathrm{d}\phi_i}{\mathrm{d}t}
+= -\frac{F_{i+1/2} - F_{i-1/2}}{\Delta x} + S_i,
+\qquad
+F_{i+1/2} = (u\phi)_{i+1/2},
+\label{eq:semi-discret}
+\end{equation}
+où \(S_i\) est la moyenne cellulaire du terme source. Toute amélioration du traitement du transport est
+introduite au niveau de la définition du flux \(F_{i+1/2}\), sans modifier la structure conservative du
+bilan.
+
+\paragraph{Avancement explicite et conservation discrète.} En isolant provisoirement le terme source,
+l'étape advective s'écrit
+\begin{equation}
+\phi_i^* = \phi_i^n - \frac{\dt}{\Delta x}\left(F_{i+1/2}^n - F_{i-1/2}^n\right).
+\label{eq:update-fv}
+\end{equation}
+La somme des contributions de flux internes s'annule lors d'une sommation sur toutes les cellules : les
+seules variations globales proviennent des flux traversant les frontières du domaine. Dans l'équation,
+cette propriété revêt une importance particulière, car une erreur de conservation du transport se
+propagerait vers le calcul hydraulique par l'intermédiaire de \(\rho(\phi)\) et de \(f_m(\phi)\), puis vers
+le taux d'érosion par l'intermédiaire de \(\tau_b\). La conservation du transport est donc une condition
+nécessaire non seulement pour la qualité du champ \(\phi\), mais également pour la cohérence du couplage
+multiphysique dans son ensemble.
+
+\subsection{Reconstruction MUSCL et construction du flux interfacial}
+
+\paragraph{Définition de la reconstruction.} La formulation conservative fixe la structure du bilan mais ne
+détermine pas la manière dont le flux interfacial \(F_{i+1/2}\) doit être évalué à partir des moyennes
+cellulaires. Pour un schéma de premier ordre, la valeur d'interface est prise égale à la valeur cellulaire :
+\(\phi_{i+1/2} \approx \phi_i\), ce qui conduit à une erreur de troncature en \(\mathcal{O}(\Delta x)\).
+La reconstruction MUSCL (Monotonic Upstream-centered Scheme for Conservation Laws) consiste à reconstruire
+dans chaque cellule un \emph{profil linéaire} au lieu d'un profil constant,
+\begin{equation}
+\phi(x,t^n) \simeq \phi_i^n + s_i^n\left(x - x_i\right),
+\qquad x \in C_i ,
+\label{eq:reconstruction-lineaire}
+\end{equation}
+où \(s_i^n\) est une approximation limitée de la pente de \(\phi\) dans la cellule \(i\). Les états
+reconstruits de part et d'autre d'une interface \(x_{i+1/2}\) sont alors
+\begin{equation}
+\phi_{i+1/2}^{L} = \phi_i + \frac{1}{2}s_i,
+\qquad
+\phi_{i+1/2}^{R} = \phi_{i+1} - \frac{1}{2}s_{i+1},
+\label{eq:etats-interface}
+\end{equation}
+le premier étant associé à la cellule amont immédiate pour un écoulement dirigé vers les \(x\) croissants.
+Le flux numérique est ensuite construit par un flux de Godunov pour l'équation d'advection linéaire, qui
+se réduit au décentrage selon le signe de la vitesse :
+\begin{equation}
+F_{i+1/2} = a_{i+1/2}\,
+\begin{cases}
+\phi_{i+1/2}^{L}, & a_{i+1/2} \ge 0,\\[1mm]
+\phi_{i+1/2}^{R}, & a_{i+1/2} < 0,
+\end{cases}
+\qquad
+a_{i+1/2} = \beta_u\,\frac{u_i + u_{i+1}}{2}.
+\label{eq:flux-godunov}
+\end{equation}
+Cette construction est cohérente : elle reproduit le schéma amont lorsque la pente est nulle et se réduit à
+un schéma d'ordre deux lorsque la pente est exacte.
+
+\paragraph{Rôle du limiteur : du rapport de pentes à la pente effective.} La pente \(s_i\) ne peut pas être
+choisie librement. Une reconstruction linéaire non contrôlée produit, au voisinage des fronts, des
+oscillations non physiques et peut conduire à des valeurs négatives de la concentration. La pente est donc
+exprimée sous la forme \(s_i = \Psi(r_i)\,\Delta_{R,i}\), où
+\begin{equation}
+\Delta_{L,i} = \phi_i - \phi_{i-1},
+\qquad
+\Delta_{R,i} = \phi_{i+1} - \phi_i,
+\qquad
+r_i = \frac{\Delta_{L,i}}{\Delta_{R,i}},
+\label{eq:rapport-pentes}
+\end{equation}
+et où \(\Psi\) est une fonction \emph{limiteur}. Toutes les fonctions de limitation usuelles partagent la
+propriété
+\begin{equation}
+\Psi(r) = 0 \quad \text{pour } r \le 0,
+\label{eq:psi-nul}
+\end{equation}
+c'est-à-dire qu'elles annulent la pente aux extrema locaux et aux discontinuités. C'est cette propriété
+qui distingue essentiellement le schéma limité d'une reconstruction centrale non limitée, et qui explique
+la perte locale d'ordre deux aux extrema : le schéma devient localement d'ordre un précisément là où
+l'ordre deux produirait un dépassement.
+
+\paragraph{Condition TVD et fonctions de limitation usuelles.} La condition assurant qu'un schéma
+\(\phi_i^{n+1} = H(\phi^{n}_{i-1},\phi^n_i,\phi^n_{i+1})\) est \emph{Total Variation Diminishing}
+s'écrit, sous condition CFL adéquate,
+\begin{equation}
+\mathrm{TV}(\phi^{n+1}) \le \mathrm{TV}(\phi^{n}),
+\qquad
+\mathrm{TV}(\phi) = \sum_i\left|\phi_{i+1}-\phi_i\right| .
+\label{eq:tvd}
+\end{equation}
+Pour la forme~\eqref{eq:reconstruction-lineaire}--\eqref{eq:flux-godunov}, la condition suffisante de
+stabilité est
+\begin{equation}
+0 \le \Psi(r) \le \min\left(2r,\,2\right),
+\label{eq:condition-psi}
+\end{equation}
+ce qui définit la région admissible des limiteurs. Les trois fonctions les plus utilisées sont
+\begin{align}
+\text{minmod} &: \quad \Psi(r) = \max\left(0,\min\left(r,1\right)\right),
+\label{eq:minmod}\\[1mm]
+\text{van Leer} &: \quad \Psi(r) = \frac{r + |r|}{1 + |r|},
+\label{eq:vanleer}\\[1mm]
+\text{Monotonised Central (MC)} &: \quad \Psi_{\mathrm{MC}}(r)
+= \max\left(0,\min\left(2r,\tfrac{1}{2}(1+r),2\right)\right).
+\label{eq:mc}
+\end{align}
+Le limiteur minmod est le plus restrictif : il est le plus diffusif des trois et conserve la propriété TVD
+pour tout nombre de Courant. Le limiteur de van Leer occupe une position intermédiaire et présente
+l'avantage d'être une fonction régulière (\(\mathcal{C}^1\)) de \(r\), ce qui évite les discontinuités de
+pente qui peuvent exciter le couplage avec le facteur de résistance \(f_m(\phi)\). Le limiteur MC est le
+moins diffusif des trois tout en satisfaisant~\eqref{eq:condition-psi} : il correspond à la plus grande
+pente admissible dans la région TVD, ce qui explique qu'il soit fréquemment retenu pour les fronts raides.
+
+\subsection{Propriété TVD et seuil de stabilité du schéma retenu}
+
+La condition~\eqref{eq:condition-psi} garantit la décroissance de la variation totale, mais elle ne fixe
+pas à elle seule la limite de stabilité temporelle du schéma. Pour la forme reconstruire--résoudre--avancer
+utilisée ici, c'est-à-dire une reconstruction linéaire limitée suivie d'une avancée explicite d'Euler, la
+propriété TVD est établie théoriquement sous la condition plus restrictive
+\begin{equation}
+\mathrm{CFL} \le \frac{1}{2},
+\label{eq:cfl-half}
+\end{equation}
+et non sous la condition \(\mathrm{CFL} \le 1\) valable pour les schémas de type flux-limiteur \og
+Lax--Wendroff limité \fg{} (Sweby, 1984 ; LeVeque, 2002 ; Toro, 2009). Cette distinction est importante en
+pratique, car c'est la valeur \eqref{eq:cfl-half} qui conditionne le réglage du pas de temps.
+
+Une vérification numérique directe de ce seuil a été effectuée sur l'équation d'advection linéaire avec un
+état initial en marche et une période complète, pour les deux limiteurs retenus et pour les deux variantes
+du schéma. Le tableau~\ref{tab:seuil-cfl} en présente les résultats.
+
+\begin{table}[H]
+\centering
+\caption{Seuil de stabilité observé pour le schéma d'advection (équation d'advection linéaire, état
+initial en marche, \(N_x = 120\), 200 pas). \og OK \fg{} indique un schéma stable, sans dépassement
+\(\max(\phi) > 1.02\) ni valeur négative \(\min(\phi) < 0\). \og Échec \fg{} indique l'apparition
+d'oscillations divergentes.}
+\label{tab:seuil-cfl}
+\small
+\begin{tabular}{llccccccc}
+\toprule
+Limiteur & Variante & 0.30 & 0.40 & \textbf{0.50} & 0.55 & 0.70 & 0.90 & 0.99 \\
+\midrule
+MC & reconstruire--résoudre--avancer & OK & OK & \textbf{OK} & Échec & Échec & Échec & Échec \\
+MC & MUSCL--Hancock (prédicteur) & OK & OK & \textbf{OK} & OK & OK & OK & OK \\
+van Leer & reconstruire--résoudre--avancer & OK & OK & \textbf{OK} & Échec & Échec & Échec & Échec \\
+van Leer & MUSCL--Hancock (prédicteur) & OK & OK & \textbf{OK} & OK & OK & OK & OK \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Le seuil observé pour la variante reconstruire--résoudre--avancer est
+\(\mathrm{CFL} \approx 0.5\), indépendamment du limiteur retenu, en accord avec~\eqref{eq:cfl-half}.
+L'ajout d'un prédicteur de type MUSCL--Hancock (avancement des états d'interface d'un demi-pas avant le
+calcul du flux) repousse ce seuil à \(\mathrm{CFL} \approx 1\), conformément à la théorie
+(Sweby, 1984).
+\end{tablenotes}
+\end{table}
+
+Deux conséquences pratiques en découlent. Premièrement, le nombre de Courant retenu pour les simulations
+présentées dans ce travail, \(\mathrm{CFL}_{\mathrm{tgt}} = 0.35\), se situe à l'intérieur du domaine de
+stabilité avec une marge confortable, ce qui justifie \emph{a posteriori} le choix de cette valeur, et non
+un simple empirisme. Le réglage n'est donc pas arbitraire : il est à la fois suffisamment proche du seuil
+pour ne pas dégrader inutilement la résolution temporelle, et suffisamment éloigné pour absorber les
+variations locales du pas de temps. Deuxièmement, si l'on souhaitait augmenter \(\mathrm{CFL}\) et donc
+accélérer le calcul, la voie correcte n'est pas d'augmenter le nombre de Courant du schéma actuel, mais
+d'ajouter un prédicteur de type Hancock ; cette possibilité est mentionnée comme perspective
+d'optimisation et non comme un réglage disponible.
+
+\subsection{Comparaison avec le schéma amont du premier ordre et les reconstructions non limitées}
+
+\paragraph{Schéma amont du premier ordre : diffusion numérique.} Le schéma amont est obtenu en posant
+\(s_i \equiv 0\) dans~\eqref{eq:reconstruction-lineaire}, soit \(F_{i+1/2} = a_{i+1/2}\phi_i\) pour
+\(a \ge 0\). Il est inconditionnellement positif et TVD pour \(\mathrm{CFL} \le 1\), mais introduit une
+diffusion numérique explicite, dont le coefficient est donné par l'équation modifiée du schéma,
+\begin{equation}
+\Disc = \frac{|a|\,\Delta x}{2}\left(1 - \mathrm{CFL}\right).
+\label{eq:diffnum}
+\end{equation}
+Cette diffusion n'est pas un artefact mineur : elle étale le front proportionnellement à
+\(\sqrt{\Disc\,t}\). Pour la configuration de référence de la campagne A (\(u \approx 4.5\) m/s,
+\(\Delta x = 1.95\times10^{-4}\) m pour \(N_x = 600\), \(\mathrm{CFL} = 0.35\)), on obtient
+\(\Disc \approx 2.9\times10^{-4}\ \mathrm{m^2/s}\). Au bout d'une demi-unité de temps caractéristique
+(\(t = 0.5\,\ter \approx 475\) s), l'étalement caractéristique du front atteint
+\(\sqrt{\Disc\,t} \approx 0.37\) m, soit environ \emph{trois fois} la longueur du conduit. Autrement dit,
+un schéma amont aurait, à l'échelle d'une fraction de \(\ter\), diffusé la totalité de la structure
+spatiale que le modèle cherche précisément à décrire.
+
+Le tableau~\ref{tab:fronts} confirme ce diagnostic sur le test d'advection linéaire : le schéma amont
+étale le front sur environ le quart du domaine, contre quatre à six cellules pour les schémas limités,
+et sa variation totale reste égale à sa valeur initiale (absence d'oscillation, mais diffusion maximale).
+
+\begin{table}[H]
+\centering
+\caption{Comparaison quantitative des schémas d'advection sur un test de référence : advection
+linéaire d'un créneau de largeur \(0.3L\), \(\mathrm{CFL} = 0.5\), \(N_x = 120\) à \(\Delta x\) fixé, après
+un déplacement correspondant à un nombre entier de cellules. Les erreurs sont calculées contre la
+solution exacte translatée ; la largeur de front est le nombre de cellules telles que
+\(0.05 < \phi < 0.95\) (deux fronts, donc un minimum de 4 cellules).}
+\label{tab:fronts}
+\small
+\begin{tabular}{llccccc}
+\toprule
+Schéma & Limiteur & Largeur de front & \(\min\phi\) & \(\mathrm{TV}/\mathrm{TV}_0\)
+& \(\varepsilon_{L_1}\) & \(\varepsilon_{L_\infty}\) \\
+\midrule
+Amont (ordre 1) & --- & \(24\) & \(\ge 0\) & \(1.00\) & \(5.1\times10^{-2}\) & \(4.5\times10^{-1}\) \\
+MUSCL & minmod & \(4\) & \(\ge 0\) & \(1.00\) & \(8.3\times10^{-3}\) & \(2.1\times10^{-1}\) \\
+MUSCL & van Leer & \(4\) & \(\ge 0\) & \(1.00\) & \(4.6\times10^{-3}\) & \(1.4\times10^{-1}\) \\
+MUSCL & MC & \(4\) & \(\ge 0\) & \(1.00\) & \(4.2\times10^{-3}\) & \(1.3\times10^{-1}\) \\
+Reconstruction linéaire non limitée & --- & oscillations & \(<0\) & \(\gg 1\) & --- & --- \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item À résolution égale, le schéma limité réduit l'erreur \(L_1\) d'un facteur 6 à 12 par rapport au
+schéma amont, pour une largeur de front divisée par six. La reconstruction non limitée devient
+instable et produit des valeurs négatives, la valeur de \(\mathrm{TV}/\mathrm{TV}_0\) n'ayant alors
+plus de sens.
+\end{tablenotes}
+\end{table}
+
+\paragraph{Reconstructions non limitées : oscillations et perte de positivité.} En l'absence de
+limiteur, la pente est estimée par une formule centrée, \(s_i = \frac{1}{2}(\phi_{i+1}-\phi_{i-1})\),
+et le schéma devient une variante de type Lax--Wendroff. Les tests du tableau~\ref{tab:seuil-cfl} montrent
+que cette variante n'est pas seulement oscillante : elle produit des valeurs \emph{négatives} de la
+concentration dès les premiers pas, et ce même pour un nombre de Courant faible
+(\(\mathrm{CFL} = 0.25\)). Or une concentration négative n'a pas de sens physique et, dans le modèle
+couplé, une valeur négative de \(\phi\) se propagerait vers \(f_m(\phi)\) et \(\lambda(\phi)\), où la
+fonction \(\lambda\) n'est définie que pour \(\phi \in\,]0,\phisol[\). La non-linéarité de la fermeture
+rhéologique transforme donc immédiatement une oscillation numérique du transport en erreur irrécupérable
+sur l'hydraulique. C'est cette raison, et non une préférence esthétique, qui impose le recours à un
+limiteur.
+
+\subsection{Contraintes de positivité et de monotonie de la concentration}
+\label{sec:positivite}
+
+Le champ \(\phi\) doit satisfaire deux contraintes physiques : la positivité, \(\phi \ge 0\), et la borne
+supérieure \(\phi \le \phisol\), qui traduit l'impossibilité pour la suspension de dépasser la fraction
+solide du matériau intact.
+
+\paragraph{Borne supérieure.} La contrainte \(\phi \le \phisol\) est assurée par la structure même du
+traitement du terme source, puisque la solution exacte~\eqref{eq:source-exacte} est une combinaison
+convexe entre l'état post-advectif et \(\phisol\) :
+\begin{equation}
+\phi_i^{n+1} = \phisol - \left(\phisol - \phi_i^*\right)e^{-k_i^n\dt},
+\qquad\Longrightarrow\qquad
+\phi_i^{n+1} \le \max\left(\phisol,\, \phi_i^*\right).
+\label{eq:borne-sup}
+\end{equation}
+Cette propriété est une conséquence directe de l'exposant négatif et ne dépend pas de la valeur de
+\(k\dt\), ce qui explique l'intérêt de l'intégration analytique pour les régimes raides où
+\(k\dt \gg 1\). Elle n'est toutefois valable que si \(\phi_i^*\) respecte lui-même la borne : c'est
+l'étape d'advection qui doit la préserver.
+
+\paragraph{Positivité à l'étape d'advection.} La reconstruction et le flux limités préservent la
+positivité sous deux conditions : (i) les valeurs reconstruites aux interfaces restent encadrées par les
+moyennes cellulaires voisines, propriété satisfaite par construction par les limiteurs de
+type~\eqref{eq:condition-psi} puisque \(|s_i| \le 2\min(|\Delta_L|,|\Delta_R|)\) ; et (ii) le nombre de
+Courant reste dans le domaine de stabilité \eqref{eq:cfl-half}. Les résultats du
+tableau~\ref{tab:seuil-cfl} confirment ce comportement : pour \(\mathrm{CFL} \le 0.5\), le schéma ne
+produit aucune valeur négative, quelle que soit la position du front, alors qu'au-delà du seuil
+l'oscillation apparaît immédiatement.
+
+\paragraph{Implication pour le réglage de \(\Delta t_{\max}\).} Cette analyse fournit un critère de
+cohérence supplémentaire pour le réglage du pas de temps. Si le nombre de Courant effectif venait à
+dépasser durablement \(0.5\) — par exemple parce qu'une borne \(\dt_{\max}\) trop élevée prendrait le
+relais du contrôle CFL —, la positivité du champ \(\phi\) ne serait plus garantie. Le diagnostic
+d'effectivité présenté à la section~\ref{sec:cfl-diagnostic} doit donc être complété par un contrôle du
+nombre de Courant effectif maximal, et non de sa seule moyenne.
+
+\paragraph{Contrôle pratique et défaut de masse.} Dans la pratique, une troncature
+\(\phi \leftarrow \max(\phi,0)\) est appliquée après l'étape d'advection, afin de prémunir le calcul contre
+toute excursion résiduelle. Cette opération doit être documentée, car elle n'est pas conservative :
+la masse retirée doit être cumulée et rapportée, et elle doit rester négligeable devant la masse
+transitée. Un contrôle systématique consiste à suivre le rapport
+\begin{equation}
+\delta_m(t) = \frac{\displaystyle\sum_i\max\left(-\phi_i^*,0\right)\Delta x}
+{\displaystyle\sum_i\phi_i^n\,\Delta x},
+\label{eq:defaut-masse}
+\end{equation}
+dont la valeur doit rester inférieure à la tolérance de conservation retenue pour la vérification. Ce
+contrôle complète le diagnostic CFL et fournit une mesure quantitative de la qualité du couplage
+transport--hydraulique.
+
+% TODO auteur : faire apparaitre explicitement (i) le limiteur unique retenu pour les resultats publies
+% (van Leer ou MC) et (ii) la valeur du defaut de masse (eq. 4.xx) mesuree sur les simulations de reference.
+
+
+%=====================================================================================
+\section{Intégration du terme d'érosion et couplage des sous-modèles}
+\label{sec:source-erosion}
+%=====================================================================================
+
+\subsection{Décomposition opératoirelle du problème}
+
+Le terme source de l'équation~\eqref{eq:transport} présente une nature mathématique différente de celle du
+terme advectif. Le terme advectif est un opérateur de transport non local, dont la discrétisation exige un
+traitement conservateur et une reconstruction haute résolution ; le terme source est un opérateur
+\emph{local} de relaxation,
+\begin{equation}
+S_\phi(\phi) = k\left(\phisol - \phi\right),
+\label{eq:opsrc}
+\end{equation}
+dont la raideur est fixée par la valeur locale de \(k = 2\mdot/(R\rho_s)\). Cette différence de nature
+justifie un traitement en deux étapes, selon la décomposition d'opérateurs
+\begin{equation}
+\frac{\partial\phi}{\partial t} =
+\underbrace{-\frac{\partial(u\phi)}{\partial x}}_{\mathcal{L}_{\mathrm{adv}}(\phi)}
++ \underbrace{k\left(\phisol-\phi\right)}_{\mathcal{L}_{\mathrm{src}}(\phi)} .
+\label{eq:splitting}
+\end{equation}
+Dans la stratégie retenue, l'étape d'advection produit un état intermédiaire \(\phi^*\), puis l'étape de
+relaxation est appliquée localement, cellule par cellule, sur cet état. Le couplage avec l'hydraulique
+intervient en amont : \(k\) est calculé à partir de la contrainte pariétale issue de la résolution
+hydraulique du même pas, et non imposé indépendamment.
+
+\subsection{Intégration analytique du terme source de relaxation}
+
+En gelant \(k_i^n\) pendant le pas de temps, l'équation locale à résoudre dans chaque cellule est
+\begin{equation}
+\frac{\mathrm{d}\phi}{\mathrm{d}t} = k_i^n\left(\phisol - \phi\right),
+\qquad \phi(0) = \phi_i^*,
+\label{eq:relax-locale}
+\end{equation}
+équation linéaire du premier ordre dont la solution exacte est
+\begin{equation}
+\phi_i^{n+1} = \phisol - \left(\phisol - \phi_i^*\right)\exp\left(-k_i^n\,\dt\right).
+\label{eq:source-exacte-2}
+\end{equation}
+Cette intégration analytique présente trois avantages par rapport à un traitement explicite ou à un
+schéma de type Runge--Kutta.
+
+\paragraph{Absence d'erreur de troncature temporelle pour la source.} Quelle que soit la valeur de
+\(k_i^n\dt\) — et celle-ci peut être très grande dans les épisodes d'érosion intense — la
+relation~\eqref{eq:source-exacte-2} reste la solution exacte de l'équation locale. Les schémas explicites
+introduiraient au contraire une erreur \emph{et} une contrainte de stabilité du type \(k\dt<1\) qui
+limiterait le pas de temps sans rapport avec la physique du transport.
+
+\paragraph{Préservation stricte de la borne supérieure.} Comme \(\exp(-k\dt)\in\,]0,1]\), la solution est
+une combinaison convexe entre \(\phi_i^*\) et \(\phisol\) :
+\begin{equation}
+\phi_i^{n+1} = \phi_i^* + \left(\phisol-\phi_i^*\right)\left[1 - e^{-k\dt}\right],
+\qquad
+\min\left(\phi_i^*,\phisol\right) \le \phi_i^{n+1} \le \max\left(\phi_i^*,\phisol\right).
+\label{eq:convexite}
+\end{equation}
+La borne \(\phi\le\phisol\) est donc préservée indépendamment de la valeur de \(k\dt\), sans troncature
+corrective. Dans le couplage retenu, où \(\lambda(\phi)\) et \(f_m(\phi)\) deviennent singulières lorsque
+\(\phi\to\phisol\), cette propriété n'est pas cosmétique : elle empêche l'apparition d'arguments hors
+domaine dans les fermetures hydrauliques, et donc l'interruption du calcul.
+
+\paragraph{Saturation naturelle du terme d'érosion.} La source tend vers zéro lorsque
+\(\phi\to\phisol\), de sorte que le modèle possède un mécanisme d'auto-limitation : la vitesse
+d'injection des solides décroît à mesure que la suspension se concentre. Ce comportement est celui décrit à
+la section~\ref{sec:couplage} et contraste avec une formulation à source directe, qui injecterait
+\(\mdot\) indépendamment de l'état de concentration atteint et autoriserait \(\phi > \phisol\).
+
+\subsection{Préservation des bornes et conditions de validité}
+
+La préservation de la borne supérieure par~\eqref{eq:source-exacte-2} repose sur l'hypothèse que
+\(\phi_i^*\) est lui-même admissible. Cette hypothèse se décompose en deux conditions, correspondant aux
+deux phases du pas de temps.
+\begin{enumerate}
+  \item \textbf{Admissibilité de l'état initial et de la condition d'entrée.} Le champ initial doit
+        satisfaire \(0\le\phi_0(x)\le\phisol\), et la condition d'entrée doit respecter la même borne.
+        Pour les simulations présentées, l'entrée est en eau claire (\(\phi_{\mathrm{in}} = 0\)), ce qui
+        est le cas le plus contraignant en termes de gradient à la limite amont.
+  \item \textbf{Admissibilité de l'état post-advectif.} La reconstruction limitée et le flux de
+        Godunov~\eqref{eq:flux-godunov} préservent la positivité sous la condition de
+        stabilité~\eqref{eq:cfl-half}, comme établi à la section~\ref{sec:positivite}. Il en résulte que
+        \(\phi_i^*\) reste compris entre les valeurs extrêmes des cellules voisines à l'instant
+        précédent, donc dans l'intervalle \([0,\phisol]\) par récurrence.
+\end{enumerate}
+Le résultat est donc le suivant : la borne \([0,\phisol]\) est préservée \emph{par construction} pour tout
+pas de temps tel que la condition CFL soit respectée, sans avoir recours à une troncature de sécurité.
+Cette propriété mérite d'être explicitement identifiée comme un résultat de la stratégie numérique
+retenue, car elle conditionne la robustesse du couplage non linéaire. En pratique, une troncature
+résiduelle est néanmoins appliquée et son effet est quantifié par le défaut de
+masse~\eqref{eq:defaut-masse}, afin que la vérification de conservation reste mesurable.
+
+\subsection{Couplage entre érosion, concentration et évolution géométrique}
+
+La cohérence temporelle du couplage repose sur l'ordre des opérations. Dans l'algorithme retenu, pour un
+pas de temps donné, les opérations sont effectuées dans la séquence suivante :
+\begin{enumerate}[label=(\roman*)]
+  \item résolution du débit \(Q^n\) à partir de l'état \((R^n,\phi^n)\), par le solveur
+        d'encadrement--dichotomie ;
+  \item calcul des grandeurs locales (\(u^n\), \(Re^n\), \(f_D^n\), \(f_m^n\), \(\tau_b^n\)) et du flux
+        érodé \(\mdot^n\) ;
+  \item calcul du pas de temps \(\dt\) à partir de la condition CFL ;
+  \item mise à jour de la géométrie, \(R^n \to R^{n+1}\), par~\eqref{eq:dRdt} ;
+  \item étape d'advection du transport, \(\phi^n \to \phi^*\) ;
+  \item intégration analytique de la source, \(\phi^* \to \phi^{n+1}\).
+\end{enumerate}
+Deux remarques sont nécessaires pour interpréter correctement cette séquence.
+
+\paragraph{Le coefficient de relaxation est évalué sur l'état hydraulique courant.} Le coefficient \(k^n\)
+est calculé à partir de \(\mdot^n\), lui-même issu de \(\tau_b^n\), c'est-à-dire de l'état hydraulique
+déterminé \emph{avant} la mise à jour de la géométrie. Le transport et l'érosion utilisent donc le même
+état de référence à l'intérieur d'un pas ; il n'y a pas d'incohérence interne au pas, mais un décalage
+d'un pas entre l'état hydraulique et l'état géométrique produit.
+
+\paragraph{Le rayon utilisé dans \(k = 2\mdot/(R\rho_s)\) et dans l'advection.} Le choix de l'évaluer
+avant ou après mise à jour du rayon constitue un choix de discrétisation de premier ordre en \(\dt\) : les
+deux variantes sont consistantes, mais elles doivent être appliquées de manière identique sur toute la
+campagne de simulation. Ce point, sans conséquence physique, doit être documenté car il influence la
+comparaison fine entre configurations.
+
+\subsection{Conséquences numériques sur la stabilité du modèle}
+
+Le traitement retenu a trois conséquences directes sur la stabilité et la robustesse du modèle couplé.
+
+\paragraph{Découplage de la contrainte de stabilité de la source.} L'intégration analytique supprime la
+contrainte classique \(k\dt \ll 1\) qui pèserait sur un traitement explicite. Le pas de temps reste donc
+gouverné par la seule condition CFL advective, ce qui est indispensable lorsque l'érosion s'accélère : dans
+le régime d'emballement, \(k\) croît fortement et un schéma explicite imposerait un pas de temps
+décroissant sans limite, alors que la dynamique du transport reste gouvernée par l'advection.
+
+\paragraph{Préservation de l'admissibilité des fermetures.} La garantie \(\phi\le\phisol\) assure que les
+arguments de \(\lambda(\phi)\) et \(f_m(\phi)\) restent dans leur domaine de définition. Sans cette
+propriété, une seule valeur légèrement supérieure à \(\phisol\) suffirait à produire une valeur
+non finie dans la fermeture, puis à contaminer l'ensemble du champ hydraulique et de l'érosion dès le pas
+suivant. La stabilité de la chaîne couplée repose donc en partie sur la structure analytique de
+l'intégration de la source.
+
+\paragraph{Contrôle explicite des deux mécanismes de dépassement restants.} Deux voies de dépassement
+subsistent et doivent être surveillées : (i) la reconstruction spatiale, si la condition CFL n'est pas
+respectée, comme établi au tableau~\ref{tab:seuil-cfl} ; (ii) l'erreur de découplage entre l'hydraulique
+et la géométrie, contrôlée par le rapport \(\tau_h/\ter\) et par le diagnostic CFL présenté ci-après.
+Ces deux contrôles constituent, avec le défaut de masse~\eqref{eq:defaut-masse}, les trois indicateurs de
+qualité recommandés pour chaque simulation.
+
+%=====================================================================================
+\section{Stratégie temporelle, stabilité et vérification numérique}
+\label{sec:verification}
+%=====================================================================================
+
+\subsection{Avancement temporel explicite de la partie advective}
+
+Le pas de temps est explicitement borné par la propagation de la concentration. La vitesse utilisée pour
+ce contrôle est celle du transport des particules, \(a_i = \beta_u\,u_i\), et non la vitesse du fluide
+seule, ce qui autorise à représenter un éventuel glissement lorsque \(\beta_u\neq1\). Le pas admissible
+pour l'étape d'advection est donc
+\begin{equation}
+\dt_{\mathrm{adv}} = \mathrm{CFL}_{\mathrm{tgt}}\,
+\frac{\Delta x}{\max_i\left|\beta_u\,u_i\right|}.
+\label{eq:dt-adv}
+\end{equation}
+La contrainte est évaluée à chaque pas, car la vitesse maximale évolue fortement au cours de la
+simulation : elle augmente avec l'élargissement local du conduit et diminue lorsque la résistance du
+mélange s'accroît.
+
+\subsection{Condition de Courant et adaptation du pas de temps}
+
+Deux situations doivent être distinguées avec soin, car elles ont des conséquences opposées sur la
+signification d'une étude de convergence.
+
+\paragraph{Écoulement établi à vitesse bornée.} Lorsque la vitesse maximale varie lentement, le pas de
+temps calculé par~\eqref{eq:dt-adv} est proche de sa borne haute \(\dt_{\max}\) et le nombre de Courant
+effectif, \(\mathrm{CFL}_{\mathrm{eff}} = \max_i|a_i|\,\dt/\Delta x\), est proche de
+\(\mathrm{CFL}_{\mathrm{tgt}}\). La résolution temporelle suit alors fidèlement le réglage demandé.
+
+\paragraph{Régime d'emballement.} Lorsque le rayon croît rapidement en sortie, la vitesse locale augmente
+comme \(R^{-2}\) à débit croissant, de sorte que \(\dt_{\mathrm{adv}}\) décroît fortement. Si la borne
+\(\dt_{\max}\) prend le relais, le nombre de Courant effectif chute très en dessous de la valeur visée et
+la résolution temporelle n'est plus contrôlée par le réglage CFL. C'est précisément ce phénomène que
+le diagnostic d'effectivité doit détecter.
+
+\subsection{Diagnostic d'effectivité de la condition CFL}
+\label{sec:cfl-diagnostic}
+
+Le diagnostic retenu est fondé sur la mesure de la \emph{fraction de pas bornés par la borne haute} du pas
+de temps. On définit
+\begin{equation}
+\mathcal{C}_{\max} = \frac{1}{N_{\mathrm{steps}}}
+\sum_{n} \mathbb{1}\left[\dt_{\mathrm{adv}}^n > \dt_{\max}\right],
+\label{eq:clipping}
+\end{equation}
+c'est-à-dire la proportion de pas de temps pour lesquels la contrainte CFL aurait conduit à un pas
+supérieur à la borne imposée. Lorsque \(\mathcal{C}_{\max}\to 1\), la totalité des pas est bornée par
+\(\dt_{\max}\) : le pas de temps n'est plus déterminé par la physique du transport, mais par un réglage
+numérique. Dans cette situation, modifier le nombre de Courant nominal ne change pas le pas effectivement
+utilisé, et toute étude de convergence temporelle devient non discriminante.
+
+Ce diagnostic doit être complété par trois indicateurs quantitatifs qui en font un véritable outil de
+vérification, et non un simple voyant :
+\begin{itemize}
+  \item le nombre de Courant effectif, en moyenne \emph{et} en maximum, ce dernier devant rester inférieur
+        au seuil de stabilité~\eqref{eq:cfl-half} ;
+  \item la fraction de pas bornés par la borne basse, qui signale un éventuel sur-raffinement inutile ou
+        une instabilité naissante ;
+  \item le défaut de masse~\eqref{eq:defaut-masse} cumulé, qui mesure l'effet des troncatures appliquées au
+        champ de concentration.
+\end{itemize}
+L'ensemble de ces indicateurs constitue la procédure de vérification recommandée avant toute
+interprétation d'une étude de convergence.
+
+\subsection{Vérification de l'influence de \(\dt_{\max}\)}
+\label{sec:dtmax}
+
+La borne \(\dt_{\max}\) est un paramètre numérique dont l'influence doit être quantifiée séparément, et non
+absorbée dans un réglage global. La procédure recommandée consiste à :
+\begin{enumerate}[label=\arabic*.]
+  \item exécuter une paire de simulations ne différant que par \(\dt_{\max}\), toutes choses égales par
+        ailleurs, et comparer les grandeurs intégrales (temps de doublement, rapport d'agrandissement
+        final, position du maximum de concentration) ;
+  \item vérifier que la fraction \(\mathcal{C}_{\max}\) de l'équation~\eqref{eq:clipping} est soit proche de
+        \(0\) (régime réellement contrôlé par la CFL), soit proche de \(1\) (régime borné par
+        \(\dt_{\max}\), dans lequel une étude CFL est sans objet) ;
+  \item ne présenter une analyse de convergence en \(\mathrm{CFL}\) que dans le premier cas, ou après
+        avoir relevé \(\dt_{\max}\) de manière à rendre la contrainte CFL active.
+\end{enumerate}
+Cette procédure est directement transposable au protocole expérimental numérique décrit dans la section
+suivante : le point essentiel est qu'une campagne \((N_x \times \mathrm{CFL})\) n'a de sens que si elle est
+précédée du contrôle~\eqref{eq:clipping}.
+
+\subsection{Étude de convergence spatiale et temporelle}
+
+L'étude de convergence retenue combine le raffinement spatial (\(N_x\)) et le réglage du nombre de Courant
+cible, sous réserve que la condition d'effectivité soit satisfaite. Les grandeurs comparées sont le
+rayon \(R(x)\), la pression \(p(x)\) et la concentration \(\phi(x)\) à des instants de référence exprimés en
+multiples de \(\ter\), l'état le plus raffiné servant de référence. Les erreurs sont évaluées après
+interpolation sur la grille de référence, en normes \(L_1\), \(L_2\) et \(L_\infty\).
+
+Les champs \(p\) et \(R\) sont des champs réguliers : leurs erreurs décroissent de manière monotone et à un
+taux proche de l'ordre formel du schéma. Le champ \(\phi\), en revanche, présente un front dont la
+description numérique obéit à une analyse différente, développée au paragraphe~\ref{sec:fronts-convergence}.
+
+\subsection{Analyse des erreurs en normes \(L_1\), \(L_2\) et \(L_\infty\)}
+
+Le comportement des normes pour une discontinuité capturée par un schéma à limiteur constitue un point
+théorique essentiel, qui éclaire directement les résultats numériques observés sur le champ \(\phi\). Un
+test de référence permet de l'illustrer quantitativement : une marche de concentration est advectée à
+\(\mathrm{CFL} = 0.5\) pendant un nombre entier de traversées de cellules, de sorte que la position exacte
+du front soit connue sans ambiguïté ; les erreurs sont alors calculées contre la solution exacte
+translatée. Le tableau~\ref{tab:convergence-front} présente l'évolution des normes avec le raffinement.
+
+\begin{table}[H]
+\centering
+\caption{Comportement des normes avec le raffinement lors de l'advection d'une discontinuité
+(\emph{marche} de concentration, \(\mathrm{CFL} = 0.5\), déplacement correspondant à \(N_x/4\) cellules,
+erreurs calculées contre la solution exacte translatée). Les produits \(\varepsilon_{L_1}N_x\) et
+\(\varepsilon_{L_2}\sqrt{N_x}\) permettent de lire directement l'ordre de convergence.}
+\label{tab:convergence-front}
+\small
+\begin{tabular}{cccccc}
+\toprule
+\(N_x\) & \(\varepsilon_{L_1}\) & \(\varepsilon_{L_1}\,N_x\) & \(\varepsilon_{L_2}\)
+& \(\varepsilon_{L_2}\sqrt{N_x}\) & \(\varepsilon_{L_\infty}\) \\
+\midrule
+\multicolumn{6}{l}{\emph{Limiteur MC (schéma retenu)}}\\
+\(64\)  & \(7.81\times10^{-3}\) & \(0.500\) & \(3.13\times10^{-2}\) & \(0.250\) & \(0.1250\) \\
+\(128\) & \(3.91\times10^{-3}\) & \(0.500\) & \(2.21\times10^{-2}\) & \(0.250\) & \(0.1250\) \\
+\(256\) & \(1.95\times10^{-3}\) & \(0.500\) & \(1.56\times10^{-2}\) & \(0.250\) & \(0.1250\) \\
+\(512\) & \(9.77\times10^{-4}\) & \(0.500\) & \(1.11\times10^{-2}\) & \(0.250\) & \(0.1250\) \\
+\(1024\) & \(4.88\times10^{-4}\) & \(0.500\) & \(7.81\times10^{-3}\) & \(0.250\) & \(0.1250\) \\
+\(2048\) & \(2.44\times10^{-4}\) & \(0.500\) & \(5.52\times10^{-3}\) & \(0.250\) & \(0.1250\) \\
+\midrule
+\multicolumn{6}{l}{\emph{Schéma amont du premier ordre (comparaison)}}\\
+\(64\)  & \(7.00\times10^{-2}\) & \(4.48\) & \(1.43\times10^{-1}\) & \(1.140\) & \(0.4300\) \\
+\(128\) & \(4.97\times10^{-2}\) & \(6.36\) & \(1.20\times10^{-1}\) & \(1.361\) & \(0.4503\) \\
+\(256\) & \(3.52\times10^{-2}\) & \(9.01\) & \(1.01\times10^{-1}\) & \(1.623\) & \(0.4648\) \\
+\(512\) & \(2.49\times10^{-2}\) & \(12.75\) & \(8.54\times10^{-2}\) & \(1.932\) & \(0.4751\) \\
+\(1024\) & \(1.76\times10^{-2}\) & \(18.05\) & \(7.18\times10^{-2}\) & \(2.298\) & \(0.4824\) \\
+\(2048\) & \(1.25\times10^{-2}\) & \(25.53\) & \(6.04\times10^{-2}\) & \(2.734\) & \(0.4875\) \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Pour le schéma limité, les deux produits \(\varepsilon_{L_1}N_x\) et
+\(\varepsilon_{L_2}\sqrt{N_x}\), ainsi que \(\varepsilon_{L_\infty}\), sont rigoureusement constants :
+l'erreur \(L_1\) décroît comme \(\Delta x\), l'erreur \(L_2\) comme \(\Delta x^{1/2}\), et l'erreur
+\(L_\infty\) \emph{ne décroît pas}. Pour le schéma amont, l'erreur \(L_\infty\) tend vers la moitié de
+l'amplitude du saut et l'erreur \(L_1\) décroît beaucoup plus lentement.
+\end{tablenotes}
+\end{table}
+
+Le résultat est sans ambiguïté, et il est plus riche que la seule décroissance de \(L_1\). Pour une
+discontinuité capturée par le schéma limité :
+\begin{itemize}
+  \item l'erreur \(L_1\) décroît proportionnellement à \(\Delta x\), soit un ordre de convergence égal à
+        l'unité, valeur attendue pour un front non résolu ;
+  \item l'erreur \(L_2\) décroît comme \(\Delta x^{1/2}\), c'est-à-dire beaucoup plus lentement, ce qui est
+        la loi asymptotique pour une discontinuité (et non l'ordre deux du schéma en zone régulière) ;
+  \item l'erreur \(L_\infty\) tend vers une \emph{constante} strictement indépendante de la résolution,
+        égale ici à \(1/8\) de l'amplitude du saut.
+\end{itemize}
+Le raffinement ne peut donc pas réduire l'erreur maximale locale d'un front capturé : il peut seulement
+réduire l'étendue spatiale de la région où cette erreur est concentrée. Ce point explique pourquoi une
+étude de convergence fondée sur la seule norme \(L_\infty\) conduirait à une conclusion erronée de
+non-convergence, alors que le schéma converge effectivement. À titre de comparaison, le schéma amont
+présente une erreur \(L_1\) qui ne décroît que très lentement (le produit \(\varepsilon_{L_1}N_x\) croît
+avec le raffinement) et une erreur \(L_\infty\) qui plafonne à la moitié du saut : le bénéfice de la
+reconstruction limitée n'est donc pas seulement une réduction d'un facteur constant, mais un
+\emph{changement d'ordre de convergence}.
+
+\subsection{Particularités de convergence des fronts advectifs de concentration}
+\label{sec:fronts-convergence}
+
+Dans les simulations couplées, l'erreur \(L_\infty\) mesurée sur \(\phi\) combine deux contributions de
+nature différente, dont les lois de décroissance ne sont pas les mêmes :
+\begin{itemize}
+  \item une contribution \emph{intrinsèque}, liée à la forme du profil capturé ; comme établi au
+        tableau~\ref{tab:convergence-front}, elle ne décroît pas avec le raffinement et reste de l'ordre
+        d'une fraction de l'amplitude du saut ;
+  \item une contribution de \emph{position}, liée au décalage du front entre deux maillages. Elle décroît
+        proportionnellement à \(\Delta x\), puisqu'un décalage d'une ou deux cellules produit, sur un front
+        raide, une différence locale du même ordre que le saut lui-même.
+\end{itemize}
+Selon le maillage et l'instant considérés, l'une ou l'autre contribution domine. Cette décomposition
+explique les deux observations apparemment contradictoires que l'on rencontre dans les études de
+convergence de modèles à front raide : d'une part, la décroissance régulière des erreurs \(L_1\)/\(L_2\)
+avec le raffinement, qui traduit la convergence au sens intégral ; d'autre part, la persistance d'une
+erreur \(L_\infty\) élevée sur le champ de concentration, alors même que les champs lisses
+(\(p\), \(R\)) convergent rapidement et régulièrement.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{figure4.png}
+\caption{Sensibilité au maillage et convergence spatiale des champs couplés. Les profils de pression et de
+rayon se superposent rapidement lorsque le maillage est raffiné ; l'écart sur la concentration en
+suspension reste localisé au niveau du front advectif, ce qui explique la persistance de la sensibilité en
+norme \(L_\infty\).}
+\label{fig:convergence-maillage}
+\end{figure}
+
+La conclusion méthodologique est donc la suivante : pour un modèle couplé comportant un front advectif
+raide, la convergence doit être interprétée norme par norme. La convergence \(L_1\)/\(L_2\) atteste la
+convergence au sens intégral et donc la validité des grandeurs globales extraites du calcul (temps
+caractéristiques, rapports d'agrandissement, indicateurs de régime). L'erreur \(L_\infty\) sur \(\phi\) ne
+constitue pas un critère de convergence adapté, et son ampleur doit être expliquée par la nature de la
+discontinuité plutôt que corrigée par un raffinement supplémentaire.
+
+\subsection{Vérification de la loi de résistance du mélange et validation croisée}
+\label{sec:verif-fm}
+
+La fermeture~\eqref{eq:fm} et son plafond~\eqref{eq:fmmax} étant appliqués au sein du solveur, leur
+traitement doit être vérifié sur deux plans : la non-régression des résultats de référence, et l'aptitude
+du modèle complet à reproduire les temps publiés pour des configurations indépendantes.
+
+\paragraph{Non-régression de la campagne A.} Trois traitements du plafond ont été comparés : la loi sans
+plafond, le minimum abrupt~\eqref{eq:fmmax} et une variante régularisée à raccord \(\mathcal{C}^1\). Pour la
+configuration de référence de la campagne A, les trois donnent \emph{exactement} le même temps de
+doublement, \(t_2 = 668.5\) s : le facteur de résistance du mélange y reste compris entre \(1.0000\) et
+\(1.0001\), c'est-à-dire que la rétroaction rhéologique est inactive à l'échelle du laboratoire et pour un
+matériau fin. Les résultats publiés de la campagne A sont donc insensibles au mode de traitement du
+plafond, ce qui autorise à retenir le minimum abrupt, conforme à la formulation publiée, sans réserve de
+non-régression.
+
+\paragraph{Effet de l'absence de plafond.} Le tableau~\ref{tab:fm-diagnostic} compare les valeurs
+maximales du facteur de résistance atteintes au cours des calculs.
+
+\begin{table}[H]
+\centering
+\caption{Diagnostic du facteur de résistance du mélange. La colonne « sans plafond » correspond à la
+loi~\eqref{eq:fm} appliquée sans le minimum~\eqref{eq:fmmax} ; la comparaison met en évidence l'artefact
+numérique que le plafond a pour fonction d'éviter.}
+\label{tab:fm-diagnostic}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Campagne & \(f_{m,\max}\) & \(\max f_m\) sans plafond & \(\max f_m\) avec plafond & symptôme sans plafond \\
+\midrule
+A (lab., \(d_p = 20\)--\(75\ \si{\micro m}\)) & \(5\) & \(1.0001\) & \(1.0001\)
+& aucun (\(f_m \approx 1\)) \\
+B (terrain, \(d_p = 1\) mm) & \(2000\) & \(1.46\times10^{12}\) & \(2000\)
+& pic local de rayon, arrêt sur \(R_{\mathrm{break}}\) \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Pour la campagne B sans plafond, le rayon maximal atteint \(179\,R_0\) alors que le rayon de sortie
+n'est que de \(3.5\,R_0\) : l'érosion se concentre en un pic isolé, la comparaison avec une évolution
+d'ensemble perd son sens, et le calcul s'interrompt sur le critère de sécurité après une durée sans
+rapport avec la dynamique recherchée.
+\end{tablenotes}
+\end{table}
+
+\paragraph{Validation croisée sur la campagne B.} Une fois le plafond appliqué dans le solveur, la
+campagne B peut être confrontée aux valeurs publiées. Le critère retenu est l'atteinte de
+\(R_{\max} = R_{\mathrm{break}} = 0.5\) m, soit \(167\,R_0\) ; il correspond, dans le code, à la
+condition d'arrêt effective. Le tableau~\ref{tab:validation-campagneB} présente la comparaison pour les
+quatre configurations (deux charges hydrauliques, avec et sans résistance aval).
+
+\begin{table}[H]
+\centering
+\caption{Validation croisée de la campagne B : temps d'échec (atteinte de \(R_{\max} = 0.5\) m) comparés
+aux valeurs publiées. La dernière colonne donne l'écart relatif du modèle aux valeurs publiées.}
+\label{tab:validation-campagneB}
+\small
+\begin{tabular}{ccccc}
+\toprule
+\(\Delta p\) (MPa) & \(\kout\) & \(\ter\) (s) & \(t_{\mathrm{fail}}\) modèle (s) & \(t_{\mathrm{fail}}\) publié (s) \\
+\midrule
+\(1.50\) & \(0\)   & \(24.7\) & \(128.60\) & \(128.1\) \quad (\(+0.4\%\)) \\
+\(1.50\) & \(500\) & \(24.7\) & \(162.13\) & \(161.8\) \quad (\(+0.2\%\)) \\
+\(3.33\) & \(0\)   & \(11.1\) & \(55.26\)  & \(55.0\) \quad (\(+0.5\%\)) \\
+\(3.33\) & \(500\) & \(11.1\) & \(63.22\)  & \(62.9\) \quad (\(+0.5\%\)) \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Les rapports de retard induits par la résistance aval sont reproduits à mieux de \(0.2\%\) :
+\(\times1.261\) contre \(\times1.263\) à \(1.5\) MPa, et \(\times1.144\) contre \(\times1.144\) à
+\(3.33\) MPa. Le seuil \(f_m = f_{m,\max}\) est atteint dans les quatre configurations, de sorte que
+l'accord porte bien sur le régime plafonné.
+\end{tablenotes}
+\end{table}
+
+L'accord obtenu, meilleur que \(0.5\%\) sur quatre configurations et deux grandeurs indépendantes, est le
+résultat de validation le plus solide de ce chapitre : il porte simultanément sur la fermeture
+hydraulique~\eqref{eq:dw}, sur la loi d'érosion~\eqref{eq:erosion}, sur le traitement de la perte
+singulière aval~\eqref{eq:charge-aval} et sur le plafond~\eqref{eq:fmmax}. Il confirme également que le
+temps d'échec est, dans ce régime, fixé par la seule balance de charge et non par la résolution spatiale :
+les valeurs du tableau~\ref{tab:validation-campagneB} sont stables lorsque \(N_x\) passe de \(100\) à
+\(600\) cellules.
+
+\paragraph{Cohérence de la campagne A.} Pour mémoire, la même procédure appliquée à la campagne A
+reproduit les deux valeurs publiées : \(668\) s contre \(666\) s publiés pour la configuration libre
+(\(+0.4\%\)) et \(877.8\) s contre \(872\) s pour la configuration avec résistance aval
+(\(+0.7\%\)), cette dernière correspondant à un coefficient de perte modéré
+\(\kout \approx 0.15\) (section~\ref{sec:kout}).
+
+\subsection{Critères de vérification synthétiques}
+
+En rassemblant les éléments des sections précédentes, la procédure de vérification recommandée pour chaque
+simulation comporte sept contrôles :
+\begin{enumerate}[label=\arabic*.]
+  \item \textbf{Contrôle analytique de l'état initial} : la contrainte pariétale initiale doit vérifier
+        \(\tau_b = R_0\Delta p/(2L)\) et le rapport \(\tau_b/\tau_c\) doit être cohérent avec le régime
+        attendu (section~\ref{sec:instabilite}) ;
+  \item \textbf{Contrôle analytique du taux de croissance} : tant que la géométrie reste quasi uniforme,
+        le rayon doit suivre la loi~\eqref{eq:R-exponentielle} avec l'écart attendu lié à la non-uniformité
+        et aux effets d'entrée ;
+  \item \textbf{Contrôle d'effectivité CFL} : la fraction de pas bornés par \(\dt_{\max}\)
+        (\eqref{eq:clipping}) et le nombre de Courant effectif maximal, qui doit rester inférieur au seuil
+        de stabilité~\eqref{eq:cfl-half} ;
+  \item \textbf{Contrôle de conservation} : le défaut de masse cumulé~\eqref{eq:defaut-masse} doit rester
+        négligeable devant la masse transitée ;
+  \item \textbf{Contrôle de convergence} : décroissance des erreurs \(L_1\)/\(L_2\) sur les champs
+        \(p\), \(R\) et \(\phi\), avec l'interprétation norme par norme établie
+        au paragraphe~\ref{sec:fronts-convergence} ;
+  \item \textbf{Contrôle de la fermeture de résistance} : la valeur maximale de \(f_m\) atteinte au cours
+        du calcul doit être comparée au plafond \(f_{m,\max}\) retenu, et le résultat interprété
+        différemment selon que le plafond est atteint ou non (paragraphe~\ref{par:fm-plafond} et
+        section~\ref{sec:verif-fm}) ;
+  \item \textbf{Contrôle du bilan de charge} : la part de \(\Delta p\) consommée par chaque terme
+        (frottement réparti, perte singulière d'entrée, perte singulière aval) doit être extraite des
+        sorties, car c'est elle qui détermine si une résistance singulière peut retarder ou arrêter le
+        processus (tableau~\ref{tab:bilan-charge}).
+\end{enumerate}
+Ces sept contrôles constituent la base de la vérification présentée au chapitre suivant. Ils présentent
+l'avantage d'être tous calculables à partir des sorties standard du code et de ne requérir aucun
+développement supplémentaire, à l'exception du dernier, qui suppose de distinguer explicitement les
+contributions de charge dans le résidu hydraulique.
+
+
+%=====================================================================================
+\section{Applications numériques et analyse paramétrique}
+\label{sec:resultats}
+%=====================================================================================
+
+\subsection{Cas de référence et régime d'instabilité}
+
+Le cas de référence correspond à la campagne A (tableau~\ref{tab:param-campagnes}), c'est-à-dire un conduit
+de laboratoire de longueur \(L = 0.117\) m et de rayon initial \(R_0 = 3\) mm, soumis à une perte de charge
+imposée équivalente à \(0.5\) m de colonne d'eau, en l'absence de résistance aval (\(\kout = 0\)). L'état
+hydraulique initial prédit par le modèle est rassemblé dans le tableau~\ref{tab:etat-initial} et comparé aux
+valeurs analytiques~\eqref{eq:tau-analytique}.
+
+\begin{table}[H]
+\centering
+\caption{État hydraulique initial du cas de référence (campagne A, \(\kout=0\)) : comparaison entre les
+valeurs analytiques exactes et le calcul.}
+\label{tab:etat-initial}
+\small
+\begin{tabular}{llcc}
+\toprule
+Grandeur & Relation & Analytique & Calculé \\
+\midrule
+Contrainte pariétale & \(\tau_b = R_0\Delta p/(2L)\) & \(62.9\) Pa & \(62.9\) Pa \\
+Rapport de supercriticité & \(\tau_b/\tau_c\) & \(62.9\) & --- \\
+Vitesse moyenne & \(u_0 = Q_0/(\pi R_0^2)\) & --- & \(4.5\) m/s \\
+Débit & \(Q_0\) & --- & \(1.28\times10^{-4}\ \mathrm{m^3/s}\) \\
+Nombre de Reynolds & \(Re = 2\rho u_0R_0/\mu_w\) & --- & \(2.7\times10^{4}\) \\
+Source volumique & \(S_A = 2\pi R_0\mdot/\rho_s\) & --- & \(5.9\times10^{-8}\ \mathrm{m^2/s}\) \\
+Rayon critique & \(R_c = 2L\tau_c/\Delta p\) & \(0.048\) mm & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Le rapport de supercriticité \(\tau_b/\tau_c \approx 63\) est très supérieur à l'unité : l'érosion est
+immédiatement active, sans phase de latence. La conséquence dynamique a été établie analytiquement au
+paragraphe~\ref{sec:instabilite} : en l'absence de résistance aval, le rayon suit une loi exponentielle
+de taux \(1/\ter\) et il n'existe aucun point fixe géométrique stable. Le calcul couplé reproduit ce
+comportement, avec une croissance monotone du rayon jusqu'à l'atteinte du critère d'arrêt.
+
+Trois observations doivent accompagner ce résultat, conformément aux critères d'arrêt
+distingués au paragraphe~\ref{sec:criteres-arret}. Premièrement, l'arrêt ne résulte pas d'une divergence
+numérique : le solveur hydraulique conserve son encadrement à chaque pas et le résidu en pression reste
+inférieur à la tolérance. Deuxièmement, l'horizon de validité quantitative
+(\(R/R_0 < 1.95\) pour \(R/L<0.05\)) est franchi bien avant la fin du calcul, de sorte que les rapports
+d'agrandissement atteints constituent des indicateurs de régime et non des prédictions. Troisièmement, le
+temps caractéristique d'arrêt, exprimé en multiples de \(\ter\), est essentiellement fixé par la définition
+du critère de sécurité \(R_{\mathrm{break}}\) ; il ne doit donc pas être présenté comme une grandeur
+prédictive sans préciser cette dépendance.
+
+\subsection{Influence de l'érodibilité du matériau}
+
+Deux sols idéalisés ont été considérés afin d'explorer la gamme d'érodibilité des mélanges silto-argileux
+compactés : un sol érodible (A, \(k_{er} = 10^{-4}\ \mathrm{s/m}\), \(\tau_c = 1\) Pa) et un sol résistant
+(B, \(k_{er} = 10^{-5}\ \mathrm{s/m}\), \(\tau_c = 10\) Pa). Le tableau~\ref{tab:erodibilite} présente les
+temps caractéristiques et les temps de doublement.
+
+\begin{table}[H]
+\centering
+\caption{Influence de l'érodibilité sur les temps caractéristiques (campagne A, \(\kout = 0\)). Les
+valeurs analytiques sont issues de~\eqref{eq:ter} et de \(t_2 = \ter\ln 2\).}
+\label{tab:erodibilite}
+\small
+\begin{tabular}{lccccc}
+\toprule
+Sol & \(k_{er}\) (s/m) & \(\tau_c\) (Pa) & \(\ter\) (s) & \(t_2\) analytique (s) & \(t_2\) calculé (s) \\
+\midrule
+Érodible (A) & \(1.0\times10^{-4}\) & \(1.0\) & \(949.4\) & \(658\) & \(666\) \\
+Résistant (B) & \(1.0\times10^{-5}\) & \(10.0\) & \(9493.6\) & \(6579\) & \(6976\) \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Le passage de A à B divise le coefficient d'érosion par dix et multiplie la contrainte critique par
+dix. Le rapport des temps de doublement calculés, \(10.5\), est proche du rapport
+\(\ter(\mathrm{B})/\ter(\mathrm{A}) = 10\) prédit par~\eqref{eq:ter}, l'écart de quelques pourcents
+provenant de la dépendance non triviale au terme \(R_c\) et du caractère non uniforme du profil.
+\end{tablenotes}
+\end{table}
+
+L'accord entre les temps analytiques et les temps calculés est de \(1\%\) pour le sol A et de \(6\%\) pour
+le sol B. Ce résultat valide simultanément la définition du temps caractéristique~\eqref{eq:ter} et la
+capacité du modèle à restituer l'effet de premier ordre de l'érodibilité sur les échelles de temps. Il
+convient toutefois de rappeler que ces échelles sont d'abord des durées d'émoussement géométrique
+(\(t_2\)) et non des temps de rupture : elles se rattachent à la phase initiale de l'érosion, celle qui
+reste compatible avec l'hypothèse d'un conduit quasi uniforme et avec le domaine de validité
+\eqref{eq:validite-1D}.
+
+\subsection{Influence de la résistance hydraulique aval}
+\label{sec:kout}
+
+L'effet d'une résistance aval est gouverné par l'équation de charge
+\begin{equation}
+\Delta p = \underbrace{\frac{f_D\,\rho\,u^2\,L}{4R}}_{\text{frottement réparti}}
++ \underbrace{\kout\,\frac{1}{2}\rho u^2}_{\text{perte singulière aval}},
+\label{eq:charge-aval}
+\end{equation}
+dans laquelle, \emph{à vitesse donnée}, la perte répartie décroît comme \(R^{-5/4}\) (loi de Blasius)
+lorsque le conduit s'élargit, tandis que la perte singulière reste proportionnelle à \(u^2\) et
+indépendante de la géométrie. Il en résulte une
+propriété structurelle importante : lorsque \(\kout\) est grand, la vitesse de sortie tend vers une valeur
+asymptotique indépendante de la géométrie,
+\begin{equation}
+u \longrightarrow u_{\max} = \sqrt{\frac{2\Delta p}{\kout\,\rho}},
+\label{eq:umax}
+\end{equation}
+qui borne la contrainte pariétale accessible et transforme la croissance exponentielle en une croissance
+quasi linéaire. La résistance aval ne module donc pas seulement la vitesse du processus : au-delà d'un
+certain seuil, elle \emph{change la nature de la dynamique} et peut conduire à un arrêt de l'érosion
+lorsque la contrainte pariétale devient inférieure à la contrainte critique.
+
+Le tableau~\ref{tab:kout} présente la sensibilité du temps de doublement à \(\kout\) pour la configuration
+de la campagne A. Les colonnes \(\mathrm{ODE}\) et \emph{simulée} distinguent deux niveaux de modèle :
+l'intégration de l'équation d'évolution avec la relation de charge~\eqref{eq:charge-aval} à géométrie
+figée, et la simulation couplée complète, où le temps de doublement est déduit du taux de croissance
+mesuré au début du calcul. La valeur \(\kout = 0\) reproduit le temps de doublement mesuré (\(666\) s) à
+\(0.4\%\) près, ce qui constitue une vérification préalable à l'interprétation des autres lignes.
+
+\begin{table}[H]
+\centering
+\caption{Sensibilité de la dynamique d'érosion à la résistance aval (campagne A). Les grandeurs sont
+évaluées à la géométrie initiale ; \(t_2\) est le temps de doublement calculé par intégration de
+l'équation d'évolution avec la relation~\eqref{eq:charge-aval}.}
+\label{tab:kout}
+\small
+\begin{tabular}{ccccccc}
+\toprule
+\(\kout\) & \(\Pi_{\mathrm{aval}}\) & \(u_0\) (m/s) & \(\tau_{b,0}\) (Pa) & \(\Delta p_{\mathrm{aval}}/\Delta p\)
+& \(t_2\) ODE (s) & \(t_2\) simulée (s) \\
+\midrule
+\(0\)    & \(0\)      & \(4.52\) & \(62.9\) & \(0\)      & \(666\) & \(668\) \\
+\(0.1\)  & \(0.21\)   & \(4.07\) & \(52.3\) & \(0.17\)   & \(895\) & \(810\) \\
+\(0.5\)  & \(1.04\)   & \(3.09\) & \(32.3\) & \(0.49\)   & \(1725\) & \(1330\) \\
+\(1\)    & \(2.08\)   & \(2.51\) & \(22.5\) & \(0.64\)   & \(2689\) & \(1937\) \\
+\(10\)   & \(20.8\)   & \(0.96\) & \(4.2\)  & \(0.96\)   & \(2.09\times10^{4}\) & \(1.27\times10^{4}\) \\
+\(500\)  & \(1.04\times10^{3}\) & \(0.14\) & \(0.14\) & \(1.00\) & arrêt immédiat & arrêt immédiat \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Pour \(\kout = 500\), la contrainte pariétale initiale (\(0.14\) Pa) est inférieure à la contrainte
+critique (\(1\) Pa) : la loi~\eqref{eq:erosion} prédit alors une absence totale d'érosion dès l'état
+initial. La ligne \(\kout = 10\) correspond à un régime où la perte singulière capte \(96\%\) de la charge
+motrice.
+\item La colonne simulée est obtenue par une simulation couplée de \(20\) s (\(N_x = 40\) à
+\(1200\)), le taux de croissance \(\dot R/R\) étant mesuré sur la fenêtre puis extrapolé en
+\(t_2 = \ln 2/\dot R\,R^{-1}\). L'écart systématique avec la colonne ODE, croissant avec \(\kout\),
+provient de l'accroissement du débit avec le rayon (\(Q \propto R^{19/7}\), voir section~\ref{sec:instabilite}),
+que l'intégration à \(\Delta p\) constant néglige.
+\end{tablenotes}
+\end{table}
+
+Trois enseignements se dégagent de ce tableau. Premièrement, l'effet d'une résistance aval est fortement
+non linéaire : un coefficient de \(0.1\) n'allonge le temps de doublement que de \(20\%\), tandis qu'un
+coefficient de \(10\) le multiplie par plus de dix-neuf. Deuxièmement, l'effet n'est pas seulement
+quantitatif : à partir d'un seuil, la croissance exponentielle laisse place à une croissance linéaire
+bornée, puis à un arrêt complet. Troisièmement, le rôle du \emph{rapport} entre perte répartie et perte
+singulière est déterminant, et non la valeur brute de \(\kout\) : pour un conduit plus long ou un rayon
+plus petit, une même valeur de \(\kout\) serait négligeable. La comparaison des configurations doit donc
+être conduite à rapport de pertes comparable, ce qui plaide pour l'introduction d'un paramètre sans
+dimension
+\begin{equation}
+\Pi_{\mathrm{aval}} = \frac{\kout\,\rho/2}{f_D\,\rho\,L/(4R)}
+= \frac{2\kout R}{f_D L},
+\label{eq:pi-aval}
+\end{equation}
+qui mesure la part de la charge consommée par la singularité aval. Pour la configuration de référence, ce paramètre vaut \(0.21\) pour
+\(\kout = 0.1\), \(1.04\) pour \(\kout = 0.5\), \(2.1\) pour \(\kout = 1\) et \(20.8\) pour
+\(\kout = 10\) : il identifie immédiatement le régime atteint, la fraction de charge consommée par la
+singularité aval s'écrivant simplement \(\Pi_{\mathrm{aval}}/(1+\Pi_{\mathrm{aval}})\).
+
+\paragraph{Résolution de la comparaison avec les valeurs publiées.}
+Le tableau~\ref{tab:kout} appelle une mise au point, car il porte le message d'ingénierie du chapitre. La
+valeur publiée pour la configuration avec résistance aval (\(t_2 = 872\) s) correspond, dans le modèle, à
+un coefficient de perte aval \emph{modéré}, \(\kout \approx 0.15\), et non à \(\kout = 10\) : la
+configuration correspondante donne \(t_2 = 877.8\) s, soit un écart de \(0.7\%\) seulement, du même ordre
+que celui obtenu pour la configuration libre (\(668\) s contre \(666\) s publiés). L'accord est donc
+retrouvé dès lors que les deux campagnes ne sont plus confondues : les coefficients élevés
+(\(10\), \(500\)) présents dans les fichiers de scénarios du code décrivent la \emph{campagne B}, à
+l'échelle du terrain, et non la campagne A. Le rapport de pertes~\eqref{eq:pi-aval} permet de s'en
+convaincre sans calcul : à l'échelle du laboratoire, \(\kout = 10\) conduit à
+\(\Pi_{\mathrm{aval}} \approx 21\), régime où la singularité aval capte \(96\%\) de la charge et où le temps
+de doublement dépasse dix-neuf fois sa valeur de référence. Une telle configuration ne décrit plus un essai
+au trou, mais un conduit presque obturé ; elle n'a pas de contrepartie expérimentale dans la campagne A.
+
+\subsection{Sensibilité au gradient hydraulique}
+
+La campagne B permet d'explorer l'effet du chargement hydraulique à l'échelle du terrain
+(\(L = 100\) m, \(\Delta p\) de \(1.5\) à \(10.0\) MPa). La loi~\eqref{eq:ter} prévoit une décroissance du
+temps caractéristique comme \(1/\Delta p\) : multiplier la charge par un facteur \(k\) doit diviser les
+temps par le même facteur. Le tableau~\ref{tab:gradient} confronte cette prédiction aux temps
+d'échec calculés pour \(\kout = 0\), en prenant pour critère l'atteinte d'un rayon de \(0.5\) m.
+
+\begin{table}[H]
+\centering
+\caption{Influence du gradient hydraulique sur le temps d'échec (campagne B, \(\kout = 0\)). Le temps
+d'échec est défini par l'atteinte de \(R = 0.5\) m. Les valeurs analytiques sont obtenues par
+\(t_{\mathrm{fail}} = \ter\ln\left[(R_{\mathrm{break}}-R_c)/(R_0-R_c)\right]\).}
+\label{tab:gradient}
+\small
+\begin{tabular}{cccccc}
+\toprule
+\(\Delta p\) (MPa) & Gradient \(\Delta p/L\) & \(\ter\) (s) & \(t_{\mathrm{fail}}\) analytique (s)
+& \(t_{\mathrm{fail}}\) intégré (s) & \(t_{\mathrm{fail}}/\ter\) \\
+\midrule
+\(1.50\) & \(15.0\) kPa/m & \(24.7\) & \(140.8\) & \(140.6\) & \(5.7\) \\
+\(3.33\) & \(33.3\) kPa/m & \(11.1\) & \(59.3\) & \(59.3\) & \(5.3\) \\
+\(10.0\) & \(100.0\) kPa/m & \(3.7\) & \(19.6\) & \(19.2\) & \(5.2\) \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Le rapport \(t_{\mathrm{fail}}/\ter\) est quasi constant (\(5.2\)--\(5.7\)), ce qui confirme
+quantitativement que le temps d'échec est piloté par le rapport \(\Delta p/L\) par l'intermédiaire du temps
+caractéristique~\eqref{eq:ter} : la dépendance en la charge est correctement capturée par
+\(t_{\mathrm{fail}} \propto 1/\Delta p\).
+\end{tablenotes}
+\end{table}
+
+Ce résultat est important pour l'interprétation géotechnique : la cinétique de l'érosion est dominée par
+le gradient hydraulique, et l'effet d'une augmentation de charge est correctement représenté par la seule
+réduction du temps caractéristique. Le modèle se comporte donc, sur ce point, comme un outil de
+\emph{transposition d'échelle} : les paramètres d'érodibilité du sol fixent \(\ter\), et le chargement
+hydraulique fixe le rapport entre le temps d'échec et \(\ter\).
+
+\paragraph{Une résistance aval ne peut que retarder l'instabilité.}
+On pourrait s'attendre à ce qu'une forte perte singulière aval finisse par arrêter l'érosion, en captant la
+quasi-totalité de la charge motrice lorsque le conduit s'élargit : c'est ce que suggère la vitesse
+asymptotique~\eqref{eq:umax}, qui ne dépend plus de la géométrie et devient donc très faible pour un
+\(\kout\) élevé. L'intégration couplée montre que ce mécanisme \emph{ne se réalise pas}, parce que la
+perte singulière est \emph{auto-limitante} : elle varie comme \(\rho u^2\) et décroît donc en \(R^{-4}\)
+lorsque le conduit s'élargit, alors que la perte répartie reste alimentée par la résistance du mélange
+\(f_m\), qui sature à son plafond. Le tableau~\ref{tab:bilan-charge} décompose la charge motrice pour la
+configuration la plus contraignante (\(\Delta p = 1.5\) MPa, \(\kout = 500\)).
+
+\begin{table}[H]
+\centering
+\caption{Décomposition de la charge motrice au cours du temps (campagne B, \(\Delta p = 1.5\) MPa,
+\(\kout = 500\)). Les deux dernières colonnes donnent la part de \(\Delta p\) consommée par la perte
+singulière aval et par le frottement réparti. \(\rho_L\) désigne la masse volumique du mélange en sortie.}
+\label{tab:bilan-charge}
+\small
+\begin{tabular}{ccccccc}
+\toprule
+\(t/\ter\) & \(t\) (s) & \(R_{\mathrm{out}}/R_0\) & \(Q\) (m\(^3\)/s) & \(u_{\mathrm{out}}\) (m/s)
+& perte aval & frottement \\
+\midrule
+\(1\) & \(24.6\) & \(1.14\) & \(5.4\times10^{-5}\) & \(1.48\) & \(43.3\%\) & \(56.7\%\) \\
+\(2\) & \(49.3\) & \(1.99\) & \(8.3\times10^{-5}\) & \(0.74\) & \(14.7\%\) & \(85.3\%\) \\
+\(3\) & \(74.0\) & \(6.51\) & \(9.9\times10^{-5}\) & \(0.08\) & \(0.2\%\) & \(99.8\%\) \\
+\(4\) & \(98.7\) & \(13.05\) & \(7.0\times10^{-4}\) & \(0.15\) & \(0.7\%\) & \(99.3\%\) \\
+\(5\) & \(123.3\) & \(34.11\) & \(1.0\times10^{-2}\) & \(0.32\) & \(3.1\%\) & \(96.9\%\) \\
+\(6\) & \(148.0\) & \(95.66\) & \(1.6\times10^{-1}\) & \(0.60\) & \(11.1\%\) & \(88.9\%\) \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item La décomposition est établie avec la masse volumique du mélange en sortie ; le résidu du solveur
+reste inférieur à \(10^{-3}\) Pa, ce qui garantit que la somme des deux parts vaut \(\Delta p\) à la
+précision d'affichage. Au-delà de \(t \approx 6\ter\), l'état dépasse l'horizon de validité géométrique de
+la réduction unidimensionnelle et n'est plus interprété quantitativement.
+\end{tablenotes}
+\end{table}
+
+La perte aval domine donc uniquement tant que le conduit est étroit (\(R_{\mathrm{out}}/R_0 \lesssim 2\),
+soit \(t \lesssim 2\ter\)). Dès que l'élargissement est engagé, elle devient marginale et le frottement du
+mélange capte la quasi-totalité de la charge. La vitesse de sortie mesurée à \(t = 5\ter\) (\(0.32\) m/s)
+reste très inférieure à la vitesse asymptotique~\eqref{eq:umax} (\(2.4\) m/s) : l'asymptote n'est jamais
+approchée, et l'érosion \emph{ne s'arrête pas} — le calcul atteint \(R_{\mathrm{break}}\) en \(162.1\) s, en
+accord avec la valeur publiée (\(161.8\) s). Une résistance aval ne peut donc que retarder l'instabilité,
+jamais l'empêcher, tant que le matériau reste érodible ; le retard lui-même sature, puisqu'il vaut
+\(\times1.14\) à \(3.33\) MPa et \(\times1.26\) à \(1.5\) MPa, valeurs reproduites à mieux de \(0.2\%\).
+
+\begin{vigilance}
+Deux points doivent accompagner l'interprétation de ces résultats. D'une part, le temps d'échec dépend
+linéairement de la définition du critère \(R_{\mathrm{break}}\) et n'a de sens qu'accompagné de son seuil
+(\(0.5\) m ici, soit \(167\,R_0\)). D'autre part, la valeur du plafond \(f_{m,\max}\) gouverne
+qualitativement la réponse de la campagne B : avec la valeur \(2000\) des scénarios du code, le calcul
+reproduit les temps publiés à mieux de \(0.5\%\), tandis qu'un plafond de \(5\) conduit à un arrêt de
+l'érosion (\(R_{\mathrm{out}}/R_0\) plafonnant à \(5.4\) pour \(\kout = 500\)). Le plafond doit donc être
+présenté comme un \emph{paramètre identifié} du modèle, et non comme un simple garde-fou numérique.
+\end{vigilance}
+
+\subsection{Influence de la perte de charge à l'entrée}
+\label{sec:kin}
+
+Le résidu hydraulique~\eqref{eq:residu} peut être complété par une perte singulière à l'entrée du
+conduit, dont la forme est symétrique de celle de la sortie. Cette perte a été introduite dans le bilan de
+charge~\eqref{eq:charge-entree} ; elle s'écrit, en notant \(u_0 = Q/(\pi R_0^2)\),
+\begin{equation}
+p(0) = P_{\mathrm{in}} - \kin\,\frac{\rho_0 u_0^2}{2},
+\label{eq:cond-entree}
+\end{equation}
+Ce terme a une portée différente de celle du coefficient aval, car une partie en est \emph{inévitable}.
+Lorsque le modèle est écrit comme un bilan de charge entre un réservoir amont et le débouché, la
+conversion de la charge statique en énergie cinétique à l'entrée est un effet de premier ordre : elle
+impose \(\kin = 1\) pour l'écoulement de référence, valeur retenue ici comme cas de base.
+
+Le tableau~\ref{tab:kin} présente l'effet d'une perte d'entrée sur la dynamique de la campagne A.
+
+\begin{table}[H]
+\centering
+\caption{Influence de la perte de charge à l'entrée (campagne A, \(\kout = 0\)). La colonne
+\(K_{\mathrm{in,tot}}\) cumule le coefficient singulier et le terme d'énergie cinétique
+(\(\mathbf{1}_{\mathrm{cin}} = 1\) si l'entrée cinétique est comptée). \(t_2\) est déduit du taux de
+croissance mesuré en début de simulation.}
+\label{tab:kin}
+\small
+\begin{tabular}{ccccc}
+\toprule
+\(K_{\mathrm{in}}\) & \(K_{\mathrm{in,tot}}\) & \(u_0\) (m/s) & \(\tau_{b,0}\) (Pa) & \(t_2\) (s) \\
+\midrule
+\(0\)   & \(0\)   & \(4.52\) & \(62.9\)  & \(668\) \quad (\(1.00\)) \\
+\(0\)   & \(1\)   & \(2.51\) & \(22.5\)  & \(1937\) \quad (\(2.90\)) \\
+\(0.5\) & \(1.5\) & \(2.17\) & \(17.5\)  & \(2522\) \quad (\(3.77\)) \\
+\(1\)   & \(2\)   & \(1.95\) & \(14.4\)  & \(3096\) \quad (\(4.63\)) \\
+\(2\)   & \(3\)   & \(1.65\) & \(10.8\)  & \(4235\) \quad (\(6.33\)) \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Le facteur entre parenthèses est le rapport \(t_2/t_2(K_{\mathrm{in,tot}} = 0)\). La contrainte
+pariétale initiale vérifie \(\tau_{b,0} = R_0\left[P_{\mathrm{in}} -
+K_{\mathrm{in,tot}}\rho u_0^2/2\right]/(2L)\) à mieux de \(0.3\%\) pour les cinq lignes, ce qui confirme
+que le terme d'entrée est correctement pris en compte dans le résidu.
+\end{tablenotes}
+\end{table}
+
+La perte d'entrée constitue un mécanisme de rétroaction \emph{négative} particulièrement efficace : en
+\(K_{\mathrm{in,tot}} = 1\), c'est-à-dire en comptant simplement l'énergie cinétique de l'écoulement
+d'entrée, le temps de doublement est déjà multiplié par \(2.9\). L'effet est ensuite sous-linéaire (un
+facteur \(3\) sur \(K_{\mathrm{in,tot}}\) n'apporte qu'un facteur \(2.2\) sur \(t_2\)), parce que la
+contrainte pariétale décroît elle-même avec la vitesse, ce qui amortit la sensibilité. Cette
+auto-limitation distingue nettement l'entrée de la sortie : la perte d'entrée agit sur toute la longueur du
+conduit par l'intermédiaire du débit, tandis que la perte de sortie est dominée par les dernières cellules
+et devient négligeable dès que le conduit s'élargit en aval (tableau~\ref{tab:bilan-charge}).
+
+Ce résultat a une conséquence pratique : le choix de traiter ou non l'entrée comme une singularité doit
+être explicité dans la définition du problème, faute de quoi le temps caractéristique peut varier d'un
+facteur \(3\) sans qu'aucun paramètre du sol n'ait changé. Le cas de référence retenu dans ce travail
+correspond à \(\kout = \kin = 0\), c'est-à-dire à une pression totale imposée en entrée et à
+une sortie libre ; c'est cette convention qui reproduit les valeurs publiées
+(tableau~\ref{tab:validation-campagneB}).
+
+\subsection{Profils spatiaux et fronts multiphysiques}
+
+La figure~\ref{fig:profils-spatiaux} présente l'évolution spatio-temporelle des quatre champs du modèle
+pour une configuration avec perte aval : rayon normalisé, pression relative, concentration relative et
+facteur de résistance du mélange. Deux structures se dégagent. D'une part, un front advectif raide de
+concentration se propage vers l'aval ; d'autre part, la localisation du gradient de pression et du
+maximum de contrainte pariétale coïncide avec la position de ce front. Cette coïncidence n'est pas fortuite :
+elle traduit le fait que la résistance du mélange, qui croît avec la concentration, modifie localement la
+perte de charge et donc la contrainte pariétale. La localisation aval de l'élargissement du conduit est donc
+une conséquence directe du couplage transport--hydraulique décrit à la section~\ref{sec:couplage}, et non
+d'un effet de bord numérique. Dans la configuration de référence, cette localisation reste toutefois
+modérée, ce qui est cohérent avec l'analyse de sensibilité de la loi de résistance du mélange
+(section~\ref{sec:fermeture-hydraulique}) : plus le matériau est fin, plus la rétroaction rhéologique est
+faible et plus le profil de rayon tend vers une forme cylindrique.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{figure3.png}
+\caption{Profils spatiaux adimensionnels le long du conduit pour la configuration avec perte aval. De haut
+en bas : rayon normalisé \(R/R_0\), rapport de pression \(p/P_{\mathrm{in}}\), concentration relative
+\(\phi/\phisol\) et facteur de résistance du mélange \(f_m\). La ligne tiretée du premier panneau
+indique la limite de validité géométrique \(R/L = 0.05\) de l'approximation 1D.}
+\label{fig:profils-spatiaux}
+\end{figure}
+
+\subsection{Analyse des temps caractéristiques d'érosion}
+
+Les deux campagnes convergent vers la même lecture des temps caractéristiques :
+\begin{itemize}
+  \item \(\ter = 2L\rho_s/(k_{er}\Delta p)\) fixe le taux de croissance de l'emballement et le temps de
+        doublement \(t_2 = \ter\ln 2\) tant que la géométrie reste quasi uniforme ;
+  \item le temps d'échec, rapporté à \(\ter\), est presque indépendant du chargement hydraulique
+        (\(t_{\mathrm{fail}}/\ter \approx 5.3\) dans la campagne B) et dépend donc principalement du
+        rapport entre le rayon d'arrêt et la géométrie initiale ;
+  \item la résistance aval agit en premier lieu sur \(\ter\), par l'intermédiaire de la charge réellement
+        disponible pour le frottement réparti.
+\end{itemize}
+À l'échelle du laboratoire, les temps de doublement obtenus (\(666\) s pour le sol érodible, \(6976\) s
+pour le sol résistant) sont du même ordre que ceux rapportés dans les campagnes d'essais au trou (HET) sur
+des mélanges silto-argileux compactés, ce qui confirme que le modèle restitue l'échelle temporelle de
+l'érosion de conduit. Cette comparaison doit toutefois rester qualitative : elle porte sur des durées et
+non sur des morphologies, puisque la géométrie du conduit échappe rapidement au domaine de validité de
+l'approche 1D.
+
+\subsection{Domaine de validité et limites de l'approche unidimensionnelle}
+\label{sec:validite}
+
+Les résultats précédents doivent être lus à la lumière du tableau~\ref{tab:sansdim}, dont trois lignes
+signalent des critères non satisfaits dans la configuration de référence. Le tableau~\ref{tab:validite}
+récapitule les limites et leur traduction pratique.
+
+\begin{table}[H]
+\centering
+\caption{Limites de l'approche unidimensionnelle et conséquences pratiques sur l'interprétation.}
+\label{tab:validite}
+\small
+\begin{tabular}{p{3.4cm}p{4.6cm}p{5.6cm}}
+\toprule
+Limite & Critère & Conséquence sur l'interprétation \\
+\midrule
+Élancement du conduit & \(R/L < 0.05\), soit \(R/R_0 < 1.95\) pour la campagne A &
+L'horizon quantitatif est atteint dès le doublement du rayon. Au-delà, les rapports d'agrandissement et
+les profils spatiaux sont des indicateurs de régime. \\[1mm]
+Longueur d'établissement & \(L_e/D \sim 10\)--\(40\) pour \(L/D = 19.5\) &
+La fermeture de conduite établie est appliquée sur un domaine du même ordre que son propre domaine de
+validité. Une sous-estimation systématique de la perte de charge réelle est possible. \\[1mm]
+Charge cinétique d'entrée & \(\frac{1}{2}\rho u^2/\Delta p = 2.1\) &
+La condition \(p(0) = P_{\mathrm{in}}\) suppose le fluide déjà accéléré. Une perte singulière d'entrée
+\(\kin\) de \(0.5\) réduit la vitesse de \(30\%\) et la contrainte pariétale de \(51\%\), et double le
+temps de doublement (valeurs mesurées, section~\ref{sec:kin}). \\[1mm]
+Inertie convective & \(8|\partial_xR|/f_D \ll 1\) &
+La relation quasi-statique~\eqref{eq:quasi} cesse d'être exacte dès que le profil de rayon se creuse
+significativement. \\[1mm]
+Rétroaction rhéologique & \(f_m\) dépend de \((d_p/l_m)^2\) &
+Pour un silt fin (\(d_p \approx 20\ \si{\micro m}\)), la résistance du mélange reste proche de l'unité et
+la dynamique est gouvernée par la seule rétroaction géométrique. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Il en résulte une recommandation d'interprétation qui structure l'ensemble des résultats présentés : les
+\emph{temps caractéristiques} extraits du modèle (temps de doublement, temps d'échec rapporté à \(\ter\))
+sont des grandeurs robustes, car ils reposent sur la relation analytique~\eqref{eq:tau-analytique} et sur
+l'échelle~\eqref{eq:ter} ; les \emph{morphologies} (profils de rayon, rapports d'agrandissement atteints,
+localisation du front) sont en revanche des résultats qualitatifs dès que \(R/L\) dépasse \(0.05\). Cette
+distinction, énoncée dès la section~\ref{sec:hypotheses}, trouve ici sa traduction quantitative.
+
+%=====================================================================================
+\section{Synthèse}
+\label{sec:synthese-chap}
+%=====================================================================================
+
+Ce chapitre a établi le cadre de modélisation et la stratégie de résolution numérique du modèle couplé.
+Quatre éléments en constituent la structure.
+
+\paragraph{Une chaîne de réductions explicite.} Le modèle unidimensionnel n'est pas posé \emph{a priori} :
+il résulte d'une suite de réductions clairement identifiées, depuis la conservation de la masse
+tridimensionnelle jusqu'à la relation quasi-statique~\eqref{eq:quasi}. Chaque hypothèse est associée à un
+critère quantitatif (tableau~\ref{tab:sansdim}) qui définit son domaine de validité. Cette façon de
+procéder a permis d'identifier trois points sur lesquels les hypothèses sont sollicitées au-delà de leur
+domaine de confort : l'élancement du conduit dans la phase d'emballement, la longueur d'établissement, et
+la représentation des effets d'entrée.
+
+\paragraph{Un solveur hydraulique robuste et vérifiable.} La détermination implicite du débit
+(\eqref{eq:FQ}) par encadrement et dichotomie fournit une garantie de convergence indépendante du
+comportement local du résidu, ce qui est indispensable dans un problème où la fermeture rhéologique
+devient raide. Le coût supplémentaire par rapport à une méthode de Newton est compensé par la fiabilité
+du sous-problème hydraulique, qui conditionne l'ensemble de la chaîne de calcul.
+
+\paragraph{Deux résultats analytiques servant de référence.} L'indépendance de la contrainte pariétale
+vis-à-vis de la fermeture de frottement, \(\tau_b = R\Delta p/(2L)\), conduit à la loi exponentielle
+\eqref{eq:R-exponentielle} : elle établit que l'emballement est une propriété structurelle de la condition
+de pression imposée, et fournit un temps de doublement analytique reproduit par le calcul à mieux de
+\(1\%\). Cette vérification est bien plus informative qu'une comparaison à une solution numérique de
+référence, car elle ne dépend d'aucune discrétisation.
+
+\paragraph{Un protocole de vérification norme par norme.} L'étude de la discrétisation du transport a
+établi trois résultats quantitatifs : la condition de stabilité du schéma reconstruire--résoudre--avancer
+(\(\mathrm{CFL}\le1/2\)), qui justifie le réglage retenu et fixe une limite supérieure à ne pas franchir ;
+les lois asymptotiques des erreurs pour une discontinuité capturée
+(\(L_1 \sim \Delta x\), \(L_2 \sim \Delta x^{1/2}\), \(L_\infty = \) constante) ; et la préservation par
+construction de la borne \(0\le\phi\le\phisol\) grâce à l'intégration analytique de la source. Ces trois
+éléments transforment l'étude de convergence en un diagnostic interprétable, et non en une simple
+comparaison de tableaux.
+
+Le chapitre suivant exploite ces résultats pour l'analyse des régimes d'érosion et l'étude paramétrique,
+en appliquant systématiquement les cinq contrôles de vérification énumérés au
+paragraphe~\ref{sec:fronts-convergence}.
+
+
+%=====================================================================================
+\appendix
+\chapter{Rappel : du bilan de quantité de mouvement à la loi de Darcy}
+\label{ann:ns}
+%=====================================================================================
+
+Cette annexe rassemble, sous une forme condensée, la chaîne d'établissement des équations utilisées comme
+point de départ de la section~\ref{sec:reduction-ns}. Elle est destinée à rendre le chapitre autonome et à
+expliciter les hypothèses exactes sous lesquelles les résultats de la réduction sont valables.
+
+\section{Conservation de la masse et incompressibilité}
+
+En écrivant que la variation de la masse d'un volume matériel est nulle, et en utilisant le théorème de
+la divergence, on obtient l'équation de continuité
+\begin{equation}
+\frac{\partial\rho}{\partial t} + \divg\left(\rho\vec{v}\right) = 0 .
+\label{eq:cont-masse}
+\end{equation}
+Pour un fluide dont la masse volumique ne varie pas sous l'effet des contraintes de surface (fluide
+\emph{incompressible} au sens de la mécanique des milieux continus), l'équation~\eqref{eq:cont-masse} se
+réduit à
+\begin{equation}
+\divg\vec{v} = \frac{\partial v_x}{\partial x} + \frac{\partial v_y}{\partial y}
++ \frac{\partial v_z}{\partial z} = 0 ,
+\label{eq:ann-div}
+\end{equation}
+qui est l'équation~\eqref{eq:div-v} utilisée à la section~\ref{sec:div-v}. Il convient de noter que
+l'incompressibilité n'interdit pas une variation de masse volumique d'origine thermique ou
+compositionnelle ; elle interdit seulement la contribution de pression.
+
+\section{Bilan de quantité de mouvement et équation de Cauchy}
+
+En appliquant le principe fondamental de la dynamique à un élément fluide, les forces appliquées se
+décomposent en une force de volume (le poids) et en des forces de surface, qui se décomposent elles-mêmes
+en une contribution normale isotrope (la pression) et une contribution de cisaillement décrite par le
+tenseur des contraintes visqueuses \(\tau_{ij}\). L'identification des forces de surface sur les faces
+opposées, par développement au premier ordre, conduit à l'équation de Cauchy
+\begin{equation}
+\rho\frac{D\vec{v}}{Dt} = -\rho g\vec{k} - \nabla P + \nabla\cdot\tau_{ij},
+\qquad
+\frac{D}{Dt} = \frac{\partial}{\partial t} + \vec{v}\cdot\nabla .
+\label{eq:cauchy}
+\end{equation}
+Le membre de gauche est la dérivée matérielle de la vitesse, qui n'est autre que l'accélération dans le
+cadre eulérien : elle comprend la variation locale et la variation convective, terme responsable de la
+non-linéarité intrinsèque des équations du mouvement des fluides.
+
+\section{Fermeture constitutive newtonienne}
+
+L'équation~\eqref{eq:cauchy} n'est pas soluble en l'état, car les contraintes n'y sont pas exprimées en
+fonction des vitesses. La fermeture constitutive d'un fluide newtonien relie le tenseur des contraintes au
+tenseur des taux de déformation,
+\begin{equation}
+\tau_{ij} = 2\mu\dot{\epsilon}_{ij},
+\qquad
+\dot{\epsilon}_{ij} = \frac{1}{2}\left(\frac{\partial v_i}{\partial x_j}
++ \frac{\partial v_j}{\partial x_i}\right).
+\label{eq:constitutif}
+\end{equation}
+En reportant~\eqref{eq:constitutif} dans~\eqref{eq:cauchy} et en utilisant
+\(\divg\vec{v} = 0\), les termes de dilatation disparaissent et l'on obtient l'équation de
+Navier--Stokes pour un fluide incompressible newtonien,
+\begin{equation}
+\rho\frac{D\vec{v}}{Dt} = -\rho g\vec{k} - \nabla P + \mu\nabla^2\vec{v}.
+\label{eq:ns-ann}
+\end{equation}
+Le dernier terme, dit visqueux, est la divergence du tenseur des contraintes, dont le caractère
+diffusif apparaît explicitement sous la forme du laplacien de la vitesse.
+
+\section{Pression réduite : élimination de la gravité}
+
+En retranchant l'équation de l'hydrostatique, \(\nabla P_s = -\rho g\vec{k}\), de
+l'équation~\eqref{eq:ns-ann}, la gravité disparaît au profit de la \emph{pression réduite}
+\(\Chat = P - P_s = P + \rho g z\) :
+\begin{equation}
+\rho\frac{D\vec{v}}{Dt} = -\nabla\Chat + \mu\nabla^2\vec{v},
+\qquad
+\Chat = P + \rho g z .
+\label{eq:ns-reduite}
+\end{equation}
+Physiquement, seule la pression en excès de l'hydrostatique met le fluide en mouvement : la pression
+hydrostatique assure, à elle seule, la compensation exacte du poids. Cette réduction est celle utilisée au
+paragraphe~\ref{sec:degenerescence} pour éliminer explicitement le terme de gravité du modèle 1D.
+
+\section{Dégénérescence vers les solutions laminaires : Poiseuille et Darcy}
+
+\subsection{Écoulement rampant et terminaison du bilan de forces}
+
+Le rapport entre les forces d'inertie et les forces visqueuses définit le nombre de Reynolds. Pour
+\(Re \ll 1\) — régime rampant de Stokes — le terme inertiel \(\rho D\vec{v}/Dt\) devient négligeable devant
+le terme visqueux, et l'équation~\eqref{eq:ns-reduite} se réduit à l'équilibre
+\begin{equation}
+0 = -\nabla\Chat + \mu\nabla^2\vec{v}.
+\label{eq:stokes}
+\end{equation}
+Cette équation est encore une équation aux dérivées partielles, mais linéaire : elle constitue le point de
+départ des solutions analytiques ci-dessous, et le prototype de toutes les fermetures locales utilisées
+dans les milieux poreux.
+
+\subsection{Écoulement dans une fracture plane}
+
+Pour un écoulement établi entre deux plans parallèles distants de \(W\), la vitesse ne dépend que de la
+coordonnée transverse et l'équation~\eqref{eq:stokes} s'intègre en
+\begin{equation}
+\vx(z) = \frac{1}{2\mu}\frac{\mathrm{d}\Chat}{\mathrm{d}x}\left(z^2 - Wz\right),
+\qquad
+q = -\frac{W^2}{12\mu}\frac{\mathrm{d}\Chat}{\mathrm{d}x}.
+\label{eq:fracture}
+\end{equation}
+
+\subsection{Écoulement dans un tube circulaire}
+
+Pour un écoulement établi dans un tube de rayon \(R\), avec la condition de non-glissement à la paroi, la
+solution parabolique (dite de Poiseuille) s'écrit
+\begin{equation}
+\vx(r) = \frac{1}{4\mu}\frac{\mathrm{d}\Chat}{\mathrm{d}x}\left(r^2-R^2\right),
+\qquad
+q = -\frac{R^2}{8\mu}\frac{\mathrm{d}\Chat}{\mathrm{d}x} .
+\label{eq:poiseuille-ann}
+\end{equation}
+En introduisant la charge \(h = \Chat/(\rho g)\), cette expression prend exactement la forme de la loi de
+Darcy \(q = -K\,\mathrm{d}h/\mathrm{d}s\) avec \(K = \rho g R^2/(8\mu)\).
+
+\subsection{Portée et limites de l'analogie avec le modèle 1D}
+
+La comparaison des trois expressions (fracture, tube, Darcy) met en évidence une structure commune :
+\begin{equation}
+\underbrace{q = -\frac{w_c^2}{c\,\mu}\frac{\mathrm{d}\Chat}{\mathrm{d}x}}_{\text{solution locale établie}}
+\qquad\longleftrightarrow\qquad
+\underbrace{\tau_b = \frac{f_D}{8}\rho\,f_m\,\frac{u^2}{2}}_{\text{fermeture turbulente retenue}}
+\label{eq:analogie}
+\end{equation}
+Dans les deux cas, la description réduite d'un écoulement confiné repose entièrement sur une
+\emph{fermeture locale} reliant un flux à une contrainte. Ce qui change entre les deux membres est la
+nature de cette fermeture, linéaire dans le cas rampant et quadratique dans le cas turbulent. L'analogie
+avec les écoulements souterrains est donc structurelle et pédagogique ; elle n'est pas quantitative, et le
+modèle de piping ne saurait être interprété comme un modèle d'écoulement dans un milieu poreux.
+Le tableau~\ref{tab:sansdim} quantifie cet écart : le conduit de renard hydraulique est en régime
+turbulent établi, hors du domaine des solutions de Poiseuille.
+
+%=====================================================================================
+\section*{Liste des notations}
+\addcontentsline{toc}{section}{Liste des notations}
+%=====================================================================================
+
+\begin{tabbing}
+\hspace{3.6cm}\=\kill
+\(A\) \> section transversale du conduit \\
+\(\Chat\) \> pression réduite (ou motrice), \(\Chat = P + \rho g z\) \\
+\(C_B\) \> coefficient dispersif de la loi de résistance du mélange \\
+\(C_r\) \> coefficient de longueur de mélange, \(l_m = C_r R\) \\
+\(d_p\) \> diamètre caractéristique des particules \\
+\(f_D\) \> facteur de frottement de Darcy de l'écoulement de référence \\
+\(f_m\) \> facteur multiplicatif de résistance dû aux particules \\
+\(F(Q)\) \> résidu scalaire du problème hydraulique, \(F(Q)=p_{\mathrm{calc}}(L;Q)-p_{\mathrm{out}}(Q)\) \\
+\(F_{i+1/2}\) \> flux numérique de concentration à l'interface \(i+1/2\) \\
+\(k\) \> taux de relaxation local de la concentration, \(k = 2\mdot/(R\rho_s)\) \\
+\(k_{er}\) \> coefficient d'érosion \\
+\(\kin,\ \kout\) \> coefficients de perte singulière à l'entrée et à la sortie \\
+\(L\) \> longueur du conduit \\
+\(L_e\) \> longueur d'établissement de l'écoulement \\
+\(l_m\) \> longueur de mélange \\
+\(\mdot\) \> flux massique érodé par unité de surface pariétale \\
+\(N_x\) \> nombre de cellules du maillage \\
+\(n_\lambda\) \> exposant de concentration de la loi de résistance \\
+\(P_{\mathrm{in}},\ P_{\mathrm{out}}\) \> pressions imposées à l'entrée et à la sortie \\
+\(p\) \> pression moyenne de section \\
+\(Q\) \> débit volumique (constant le long du conduit) \\
+\(R\) \> rayon effectif du conduit \\
+\(R_c\) \> rayon critique de la loi d'évolution, \(R_c = 2L\tau_c/\Delta p\) \\
+\(R_0\) \> rayon initial \\
+\(Re\) \> nombre de Reynolds \\
+\(r_i\) \> rapport de pentes au nœud \(i\), \(r_i = \Delta_{L,i}/\Delta_{R,i}\) \\
+\(s_i\) \> pente reconstruite dans la cellule \(i\) \\
+\(\mathcal{S}^n\) \> état du système au pas \(n\), \(\mathcal{S}^n=\{R_i^n,\phi_i^n\}\) \\
+\(S_A\) \> source volumique d'érosion par unité de longueur \\
+\(t\) \> temps \\
+\(\ter\) \> temps caractéristique d'érosion, \(\ter = 2L\rho_s/(k_{er}\Delta p)\) \\
+\(t_2\) \> temps de doublement du rayon \\
+\(\dt\) \> pas de temps \\
+\(u\) \> vitesse moyenne de section \\
+\(u_p = \beta_u u\) \> vitesse de transport des particules \\
+\(\vec{v}\) \> champ de vitesse tridimensionnel \\
+\(\beta_u\) \> rapport entre vitesse des particules et vitesse du fluide \\
+\(\gamma\) \> taux de croissance du rayon en géométrie uniforme \\
+\(\Delta p\) \> perte de charge imposée, \(\Delta p = P_{\mathrm{in}}-P_{\mathrm{out}}\) \\
+\(\dot{\epsilon}_{ij}\) \> tenseur des taux de déformation \\
+\(\lambda(\phi)\) \> fonction de concentration de la loi de résistance du mélange \\
+\(\mu_w\) \> viscosité dynamique de l'eau \\
+\(\Pi_{\mathrm{aval}}\) \> rapport entre perte singulière aval et perte répartie \\
+\(\rho,\rho_w,\rho_p\) \> masses volumiques du mélange, de l'eau et des particules \\
+\(\rho_s\) \> masse volumique apparente saturée du sol intact \\
+\(\tau_b\) \> contrainte de cisaillement à la paroi \\
+\(\tau_c\) \> contrainte critique d'érosion \\
+\(\tau_{ij}\) \> tenseur des contraintes visqueuses \\
+\(\tau_h,\ \tau_a\) \> échelles de temps convective et acoustique \\
+\(\phi\) \> fraction volumique de solides en suspension \\
+\(\phisol\) \> fraction solide du sol intact \\
+\(\Psi(r)\) \> fonction limiteur de pente \\
+\(\Disc\) \> coefficient de diffusion numérique \\
+\end{tabbing}
+
+%=====================================================================================
+\begin{thebibliography}{99}
+\addcontentsline{toc}{section}{Références}
+%=====================================================================================
+
+\bibitem{Barenblatt2003}
+Barenblatt, G.I. (2003) \emph{Scaling}. Cambridge: Cambridge University Press.
+
+\bibitem{Bonelli2006}
+Bonelli, S., Brivois, O., Borghi, R. and Benahmed, N. (2006) `On the modelling of piping erosion',
+\emph{Comptes Rendus Mécanique}, 334(8--9), pp. 555--559.
+
+\bibitem{Colebrook1939}
+Colebrook, C.F. (1939) `Turbulent flow in pipes, with particular reference to the transition region
+between the smooth and rough pipe laws', \emph{Journal of the Institution of Civil Engineers}, 11,
+pp. 133--156.
+
+\bibitem{Fell2007}
+Fell, R. and Fry, J.-J. (eds.) (2007) \emph{Internal erosion of dams and their foundations}. Boca Raton,
+FL: Taylor \& Francis.
+
+\bibitem{Julien2012}
+Julien, P.Y. (2012) \emph{Erosion and sedimentation}. 2nd edn. Cambridge: Cambridge University Press.
+
+\bibitem{Lachouette2008}
+Lachouette, D., Golay, F. and Bonelli, S. (2008) `One-dimensional modeling of piping flow erosion',
+\emph{Comptes Rendus Mécanique}, 336(9), pp. 731--738.
+
+\bibitem{Lachouette2009}
+Lachouette, D. (2009) \emph{Érosion par renard hydraulique : modélisation et comparaison aux essais
+expérimentaux}. Thèse de doctorat. Université de Grenoble.
+
+\bibitem{LeVeque2002}
+LeVeque, R.J. (2002) \emph{Finite volume methods for hyperbolic problems}. Cambridge: Cambridge
+University Press.
+
+\bibitem{Moody1944}
+Moody, L.F. (1944) `Friction factors for pipe flow', \emph{Transactions of the ASME}, 66, pp. 671--684.
+
+\bibitem{Partheniades1965}
+Partheniades, E. (1965) `Erosion and deposition of cohesive soils', \emph{Journal of the Hydraulics
+Division}, 91(1), pp. 105--139.
+
+\bibitem{Sweby1984}
+Sweby, P.K. (1984) `High resolution schemes using flux limiters for hyperbolic conservation laws',
+\emph{SIAM Journal on Numerical Analysis}, 21(5), pp. 995--1011.
+
+\bibitem{Toro2009}
+Toro, E.F. (2009) \emph{Riemann solvers and numerical methods for fluid dynamics}. 3rd edn. Berlin:
+Springer.
+
+\bibitem{Wahl2014}
+Wahl, T.L. (2014) \emph{Evaluation of erodibility-based embankment dam breach equations}. Report
+No.\ HL-2014-02. Denver, CO: U.S. Department of the Interior, Bureau of Reclamation.
+
+\bibitem{WanFell2002}
+Wan, C.F. and Fell, R. (2002) \emph{Investigation of erosion rate of base soils in embankment dams}.
+Report R-412. Sydney: University of New South Wales.
+
+\bibitem{WanFell2004}
+Wan, C.F. and Fell, R. (2004) `Investigation of rate of erosion of soils in embankment dams',
+\emph{Journal of Geotechnical and Geoenvironmental Engineering}, 130(4), pp. 373--380.
+
+\end{thebibliography}
+
+\end{document}

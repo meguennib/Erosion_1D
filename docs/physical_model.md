@@ -36,3 +36,55 @@ The rheological parameter (based on Julien's model) is proportional to the squar
 *   **Coarse Particles (e.g., Fine Sand, 200 µm):** Larger grains generate significant dissipation. The feedback is strongly activated, creating the trumpet geometry.
 
 The code is architected to handle these varying spatial and granulometric scales in a completely physical and stable manner, enforced by strict time-step control (CFL).
+
+## 6. Retained Formulation of the Mixture Resistance Law (unified: code = article = docs)
+
+The single retained closure is Julien-type, with a **hard cap applied inside the solver** (not in post-processing):
+
+```
+    f_m(phi) = min[ f_m,max , 1 + C_B * (rho_p / rho(phi)) * (d_p / l_m)^2 * lambda(phi)^n_lambda ]
+
+    lambda(phi) = 1 / [ (phi_soil/phi)^(1/3) - 1 ]        -> diverges as phi -> phi_soil
+    l_m         = C_r * R0                                (lm_mode = "clR0")
+    rho(phi)    = rho_w (1-phi) + rho_p phi
+```
+
+Implemented in `src/physics.py`:
+
+| function | role |
+|---|---|
+| `fm_julien_raw(phi, p)` | unbounded law, **diagnostic only** (never fed to the solver) |
+| `fm_julien(phi, p)`     | law as applied by the solver; capped according to `p.fm_cap_mode` |
+
+`p.fm_cap_mode` selects the cap treatment:
+
+* `"hard"` (default) — `f_m = min(f_m_max, f_m_raw)`. This is the published equation, and the
+  retained mode.
+* `"smooth"` — `f_m = 1 + (f_m_max-1) tanh((f_m_raw-1)/(f_m_max-1))`, a C1 cap. Provided as a
+  regularisation variant; verified to give identical results on campaign A.
+* `"none"` — uncapped. **Do not use**: this reproduces the historical behaviour that produced
+  `f_m ~ 1e12`, a spurious local radius spike and a false `R_break` stop on campaign B.
+
+### Retained parameter set (per campaign)
+
+| parameter | campaign A (lab) | campaign B (field) |
+|---|---|---|
+| `dp` | 20-75 um | 1.0 mm |
+| `cB` | 0.2 | 0.01 |
+| `cl` | 0.07 | 0.10 |
+| `julien_lambda_power` | 2 | 2 |
+| `fm_max` | 5 | 2000 |
+| max f_m reached | ~1.0001 (cap never active) | 2000 (cap saturated) |
+
+### Why the cap must stay in the solver
+
+For a field-scale coarse material the uncapped law reaches `f_m ~ 1.5e12` in a narrow zone. The
+resulting resistance gradient localises erosion into an isolated spike: `R_max = 179 R0` while
+`R_out = 3.5 R0`, and the run stops on the safety criterion `R_break`, which has no relation to the
+dynamics being studied. With the cap (and `fm_max = 2000`, the value in `data/scenarios.json`), the
+failure times reproduce the published field values (article Table 5) to better than 0.5 %, and the
+outlet-loss delay factors to better than 0.2 %.
+
+Note that `fm_max` is **not** a numerical guard-rail but an identified physical parameter: with
+`fm_max = 5` the field configuration arrests instead of running away. It must therefore be reported
+for every published configuration.

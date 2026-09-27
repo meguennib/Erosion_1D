@@ -26,6 +26,15 @@ def solve_Q_pressure_imposed(R, phi, p, dx, Q_guess):
     """
     rho = rho_mix(phi, p.rho_w, p.rho_p)
 
+    # Inlet minor loss. K_in          : singular (entrance) loss coefficient.
+    #                   inlet_kinetic : if True, the rho*u0^2/2 head the fluid
+    #                                   must acquire is counted as well, so
+    #                                   p(0) = Pin - (1 + K_in) rho u0^2 / 2.
+    # Defaults reproduce the historical p(0) = Pin.
+    K_in = float(getattr(p, "K_in", 0.0))
+    inlet_kinetic = bool(getattr(p, "inlet_kinetic", False))
+    K_in_total = K_in + (1.0 if inlet_kinetic else 0.0)
+
     # Precompute fm depends on phi only
     fm = fm_julien(phi, p)
 
@@ -44,7 +53,17 @@ def solve_Q_pressure_imposed(R, phi, p, dx, Q_guess):
 
         # Dominant friction term for p_x (strict mode)
         px = (2.0 / np.maximum(R, p.R_min)) * tau_b
-        pL = p.Pin + np.sum(px) * dx - p.K_out * 0.5 * rho[-1] * (u[-1] ** 2)
+        # Head budget, inlet to outlet:
+        #   p(0) = Pin - K_in_total * rho(0) * u(0)^2 / 2
+        #   p(L) = p(0) + sum(p_x dx) - K_out * rho(L) * u(L)^2 / 2
+        # with K_in_total = K_in + (1 if inlet_kinetic else 0): the kinetic
+        # energy the fluid must acquire is itself an inlet head loss.
+        # Defaults (K_in = 0, inlet_kinetic = False) -> p(0) = Pin, which is
+        # the historical behaviour and keeps published runs reproducible.
+        pL = (p.Pin
+              - K_in_total * 0.5 * rho[0] * (u[0] ** 2)
+              + np.sum(px) * dx
+              - p.K_out * 0.5 * rho[-1] * (u[-1] ** 2))
         return pL - p.Pout, tau_b, mdot, fw_loc, beta_loc, u
 
     # initial guess from previous step or a mild value
@@ -147,6 +166,10 @@ def run_simulation(p, logger):
         "clear_water_friction_model": "barenblatt_fw",
         "beta_model": "beta_barenblatt",
         "mixture_multiplier_model": "fm_julien",
+        "mixture_multiplier_cap": str(getattr(p, "fm_cap_mode", "hard")),
+        "mixture_multiplier_cap_value": float(getattr(p, "fm_max", float("inf"))),
+        "inlet_loss_coefficient": float(getattr(p, "K_in", 0.0)),
+        "inlet_kinetic_included": bool(getattr(p, "inlet_kinetic", False)),
         "pressure_solver": "bracketing_bisection",
     }
 

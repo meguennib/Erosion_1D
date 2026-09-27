@@ -15,6 +15,9 @@ class Params:
     Pin: float = 2300.0     # inlet pressure (Pa)
     Pout: float = 0.0       # outlet pressure (Pa)
     K_out: float = 0.0      # outlet minor-loss coefficient
+    K_in: float = 0.0       # inlet minor-loss coefficient (0.0 = historical p(0)=Pin)
+    inlet_kinetic: bool = False  # if True, count the rho*u0^2/2 head needed at the inlet,
+                                 # i.e. solve with K_in_total = K_in + 1
 
     # ---- Fluid / particle properties ----
     rho_w: float = 1000.0   # water density (kg/m3)
@@ -37,6 +40,7 @@ class Params:
     cl: float = 0.07        # mixing length coefficient
     julien_lambda_power: float = 2.0   # exponent for lambda(phi)
     fm_max: float = 5.0     # maximum cap for fm (Julien, 2012, hyperconcentrated flow)
+    fm_cap_mode: str = "hard"  # "hard" (published min[fm_max,.]), "smooth", "none" 
     lm_mode: str = "clR0"   # mixing length mode: "clR0" or other
 
     # ---- Transport scheme ----
