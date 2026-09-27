@@ -2352,6 +2352,77 @@ reproduits à mieux de \(0.2\%\). Autrement dit, le plafond introduit une oscill
 front dans le régime saturé, mais il ne compromet ni la \emph{cinétique} globale, qui est le résultat
 validé, ni les temps caractéristiques.
 
+\paragraph{Identification de la valeur du plafond.} Le plafond n'est pas une valeur libre : il est
+sélectionné par les valeurs publiées. Deux constats doivent d'abord être séparés. \emph{Sans plafond}, le
+modèle ne reproduit pas du tout les temps publiés : pour \(\Delta p = 1.5\) MPa, la simulation s'interrompt
+après \(34.4\) s au lieu de \(128.1\) s, parce que le pic local de \(f_m\) déclenche le critère de sécurité
+bien avant l'échéance physique. Le plafond est donc \emph{nécessaire}. \emph{Avec plafond}, le temps
+d'échec devient une fonction monotone de \(f_{m,\max}\), et c'est cette dépendance qui fixe la valeur. Le
+tableau~\ref{tab:fm-inversion} donne les temps d'échec calculés pour une gamme de plafonds, à confronter
+aux quatre valeurs publiées.
+
+\begin{table}[H]
+\centering
+\caption{Inversion du plafond \(f_{m,\max}\) sur les temps d'échec publiés (article, tableau 5). Critère :
+atteinte de \(R_{\mathrm{break}} = 0.5\) m, condition d'arrêt effective du code. Les écarts relatifs aux
+valeurs publiées sont entre parenthèses.}
+\label{tab:fm-inversion}
+\small
+\begin{tabular}{rcccccc}
+\toprule
+& & \(1.50\) MPa & \(1.50\) MPa & \(3.33\) MPa & \(3.33\) MPa & erreur \\
+\(f_{m,\max}\) & & \(\kout = 0\) & \(\kout = 500\) & \(\kout = 0\) & \(\kout = 500\) & RMS \\
+\midrule
+\multicolumn{2}{l}{\emph{publié} (article)} & \(128.1\) & \(161.8\) & \(55.0\) & \(62.9\) & --- \\
+\midrule
+\(200\)   & & \(133.4\) \scriptsize(\(+4.2\%\)) & \(214.2\) \scriptsize(\(+32.4\%\)) & \(56.8\) \scriptsize(\(+3.2\%\)) & \(86.5\) \scriptsize(\(+37.5\%\)) & \(24.9\%\) \\
+\(500\)   & & \(131.9\) \scriptsize(\(+3.0\%\)) & \(183.3\) \scriptsize(\(+13.3\%\)) & \(56.3\) \scriptsize(\(+2.3\%\)) & \(71.1\) \scriptsize(\(+13.0\%\)) & \(9.5\%\) \\
+\(1000\)  & & \(130.0\) \scriptsize(\(+1.5\%\)) & \(169.1\) \scriptsize(\(+4.5\%\)) & \(55.7\) \scriptsize(\(+1.3\%\)) & \(65.8\) \scriptsize(\(+4.6\%\)) & \(3.4\%\) \\
+\(\mathbf{2000}\) & & \(\mathbf{128.4}\) \scriptsize(\(+0.2\%\)) & \(\mathbf{161.8}\) \scriptsize(\(+0.0\%\)) & \(\mathbf{55.0}\) \scriptsize(\(+0.1\%\)) & \(\mathbf{63.0}\) \scriptsize(\(+0.2\%\)) & \(\mathbf{0.2\%}\) \\
+\(4000\)  & & \(127.0\) \scriptsize(\(-0.9\%\)) & \(153.9\) \scriptsize(\(-4.9\%\)) & \(54.5\) \scriptsize(\(-0.9\%\)) & \(61.3\) \scriptsize(\(-2.6\%\)) & \(2.8\%\) \\
+\(8000\)  & & \(126.1\) \scriptsize(\(-1.6\%\)) & \(150.5\) \scriptsize(\(-7.0\%\)) & \(54.1\) \scriptsize(\(-1.6\%\)) & \(60.2\) \scriptsize(\(-4.3\%\)) & \(4.3\%\) \\
+\(20000\) & & \(123.5\) \scriptsize(\(-3.6\%\)) & \(148.5\) \scriptsize(\(-8.2\%\)) & \(53.5\) \scriptsize(\(-2.7\%\)) & \(59.2\) \scriptsize(\(-5.8\%\)) & \(5.5\%\) \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item Temps en secondes. L'erreur quadratique moyenne porte sur les quatre configurations. Le meilleur
+ajustement est obtenu pour \(f_{m,\max} = 2000\) ; l'intervalle pour lequel l'erreur reste inférieure à
+\(2\%\) est approximativement \([1400,\,3400]\), soit un facteur \(2.4\).
+\end{tablenotes}
+\end{table}
+
+Deux remarques accompagnent ce tableau. D'une part, la contrainte provient essentiellement des deux
+configurations \emph{avec perte aval} : pour \(\kout = 0\), faire varier \(f_{m,\max}\) sur un facteur
+\(40\) (\(200\) à \(8000\)) ne déplace le temps d'échec que de \(6\%\), alors que pour \(\kout = 500\)
+l'effet atteint \(30\%\). C'est donc la résistance aval, en ralentissant le processus, qui rend le résultat
+sensible au plafond et qui identifie sa valeur. D'autre part, la fonction \(f_{m,\max} \mapsto
+t_{\mathrm{fail}}\) est monotone et sans plateau : le plafond n'est pas un paramètre inerte au-delà d'un
+seuil, il reste actif sur toute la gamme explorée.
+
+\paragraph{Placement physique du plafond.} La valeur identifiée n'est pas arbitraire au regard de la
+rhéologie des suspensions concentrées. Le plafond \(f_{m,\max} = 2000\) n'est en effet atteint que pour
+\(\phi/\phisol > 0.973\), soit \(\phi > 0.487\) pour \(\phisol = 0.50\) : c'est exactement la gamme où la
+littérature situe la transition d'un écoulement newtonien turbulent vers un comportement de pâte, entre
+\(0.45\) et \(0.53\) en fraction volumique, la contribution dispersive devenant dominante au-delà de
+\(0.53\). Le plafond borne donc la fermeture \emph{là où elle cesse d'être valable}, ce qui est
+précisément son rôle. À l'inverse, un plafond de \(5\) serait atteint dès \(\phi/\phisol = 0.543\), soit
+\(\phi = 0.27\) : il tronquerait la divergence de la fermeture dans un régime encore franchement
+newtonien, où rien ne justifie de l'interrompre. La fermeture de type Julien suit d'ailleurs la même
+divergence que la loi de Krieger--Dougherty pour la viscosité relative des suspensions concentrées ; les
+deux lois coïncident en ordre de grandeur aux deux concentrations considérées (de l'ordre de \(5\) à
+\(\phi/\phisol = 0.54\), et de \(10^{2}\) à \(10^{3}\) à \(0.97\)). La valeur \(2000\) n'est donc pas un
+garde-fou numérique choisi pour stabiliser le calcul, mais le résultat d'une identification cohérente avec
+la physique de la transition.
+
+\paragraph{Réserve sur le statut de la valeur identifiée.} Cette identification vaut ce que vaut le reste
+du modèle : elle suppose que \(\Delta p\), \(k_{er}\), \(\tau_c\), \(d_p\), \(L\) et \(R_0\) sont exacts, et
+que le critère d'échec \(R_{\mathrm{break}} = 0.5\) m est bien celui qui a servi à produire les valeurs
+publiées. Elle doit donc être présentée comme une \emph{identification conditionnelle}, et
+\(f_{m,\max} = 2000\) comme le résultat de cette identification, non comme une propriété mesurée du sol.
+C'est aussi la raison pour laquelle la valeur doit être reportée pour chaque configuration publiée, au
+même titre que \(k_{er}\) ou \(\tau_c\).
+
 \paragraph{Cohérence de la campagne A.} Pour mémoire, la même procédure appliquée à la campagne A
 reproduit les deux valeurs publiées : \(668\) s contre \(666\) s publiés pour la configuration libre
 (\(+0.4\%\)) et \(877.8\) s contre \(872\) s pour la configuration avec résistance aval
@@ -2671,7 +2742,10 @@ linéairement de la définition du critère \(R_{\mathrm{break}}\) et n'a de sen
 (\(0.5\) m ici, soit \(167\,R_0\)). D'autre part, la valeur du plafond \(f_{m,\max}\) gouverne
 qualitativement la réponse de la campagne B : avec la valeur \(2000\) des scénarios du code, le calcul
 reproduit les temps publiés à mieux de \(0.5\%\), tandis qu'un plafond de \(5\) conduit à un arrêt de
-l'érosion (\(R_{\mathrm{out}}/R_0\) plafonnant à \(5.4\) pour \(\kout = 500\)). Le plafond doit donc être
+l'érosion (\(\kout = 500\) : \(R_{\mathrm{out}}/R_0\) atteint \(10.5\) à
+\(t/\ter = 8\), puis \(16.8\) à \(40\) et \(20.6\) à \(120\), c'est-à-dire une convergence
+asymptotique vers une vingtaine de \(R_0\), sans jamais approcher
+\(R_{\mathrm{break}} = 167\,R_0\)). Le plafond doit donc être
 présenté comme un \emph{paramètre identifié} du modèle, et non comme un simple garde-fou numérique.
 \end{vigilance}
 
