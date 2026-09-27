@@ -920,6 +920,13 @@ Limiteur du schéma & --- & van Leer / MC & van Leer / MC \\
 \item Les valeurs de \(\ter\) sont calculées par~\eqref{eq:ter}. Le coefficient \(k_{er}\) est exprimé en
 \(\mathrm{s/m}\), conformément à la loi~\eqref{eq:erosion} écrite en flux massique ; toute autre unité doit
 être convertie explicitement.
+\item Les deux configurations de ce tableau sont enregistrées dans le fichier de scénarios du code
+(\texttt{data/scenarios.json}) sous les préfixes \texttt{chapitre4\_campagneA\_} et
+\texttt{chapitre4\_campagneB\_} (huit variantes : référence, perte aval, perte d'entrée pour la campagne A ;
+quatre charges et pertes aval pour la campagne B). Elles se chargent directement par
+\texttt{load\_scenario(nom)} et reproduisent les valeurs citées dans ce chapitre : \(u_0 = 4.52\) m/s,
+\(\tau_{b,0} = 62.9\) Pa et \(t_2 = 668\) s pour la campagne A, et les quatre temps d'échec du
+tableau~\ref{tab:validation-campagneB} pour la campagne B.
 \item Les paramètres \(d_p\), \(C_B\), \(C_r\), \(n_\lambda\) et \(f_{m,\max}\) sont ceux du
 code de calcul et sont donnés par campagne. Le calcul de référence de la campagne A utilise
 \(d_p = 75\ \si{\micro m}\) au lieu des \(20\ \si{\micro m}\) du sol étudié ; cette substitution est sans
