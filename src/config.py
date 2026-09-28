@@ -22,7 +22,10 @@ class Params:
     # ---- Fluid / particle properties ----
     rho_w: float = 1000.0   # water density (kg/m3)
     rho_p: float = 2650.0   # particle density (kg/m3)
-    rho_s: float = 1600.0   # dry bulk density of intact soil (kg/m3)
+    rho_s: float = 1600.0   # UNUSED by the solver: kept for backward compatibility
+                            # of configs/manifests only. The solver always computes
+                            # rho_s = rho_soil_sat(rho_w, rho_p, phi_soil)
+                            # (1990 kg/m3 in campaign A, 1850 kg/m3 in campaign B).
     mu_w: float = 1e-3      # dynamic viscosity water (Pa.s)
     phi_soil: float = 0.62  # solid volume fraction of intact soil
     phi_in: float = 0.0     # inlet concentration

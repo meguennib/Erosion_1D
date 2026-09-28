@@ -322,7 +322,7 @@
   "save_ts_every": 1,
   "t_end_factor": 0.005266705991404736,
   "Nx": 40,
-  "description": "Chapitre 4, campagne A (reference) : L=0.117 m, k_er=1e-4 s/m, tau_c=1.0 Pa, phi_soil=0.60, K_out=0, K_in=0. Deduit du tableau 4.5 du chapitre. Attendu : u0=4.52 m/s, tau_b0=62.9 Pa, t2=666-668 s (publie 666 s). R_break=5.85 mm correspond a l'horizon de validite 1D R/L=0.05."
+  "description": "Chapitre 4, campagne A (reference) : L=0.117 m, k_er=1e-4 s/m, tau_c=1.0 Pa, phi_soil=0.60, K_out=0, K_in=0. Deduit du tableau 4.5 du chapitre. Attendu : u0=4.52 m/s, tau_b0=62.9 Pa, t2=666-668 s (publie 666 s). R_break=5.85 mm correspond a l'horizon de validite 1D R/L=0.05. Parametres d'execution enregistres : Nx=40, t_end=5 s (< 0.01 t_er) - test de bon fonctionnement. Le calcul non accelere jusqu'au doublement coute plusieurs heures ; run_revision.py documente et applique l'acceleration temporelle alpha=100 (ecart mesure <= 0.015 % sur R/R0 a t/t_er=0.05). Reproduction du doublement : python3 run_revision.py --case SolA_Kout0 --nx 100 --facteur-fin 1.5  ->  t2 = 665.3 s (chapitre : 668.6 s a Nx=600, ecart 0.5 %)."
  },
  "chapitre4_campagneA_perte_aval": {
   "L": 0.117,
@@ -368,7 +368,7 @@
   "t_end_factor": 0.005266705991404736,
   "Nx": 40,
   "K_out": 0.15,
-  "description": "Chapitre 4, campagne A avec perte aval moderee : K_out=0.15. Attendu : t2=872-878 s (publie 872 s). C'est CETTE valeur de K_out, et non K_out=10, qui reproduit la deuxieme valeur publiee de la campagne A."
+  "description": "Chapitre 4, campagne A avec perte aval moderee : K_out=0.15. Attendu : t2=872-878 s (publie 872 s). C'est CETTE valeur de K_out, et non K_out=10, qui reproduit la deuxieme valeur publiee de la campagne A. Parametres d'execution enregistres : Nx=40, t_end=5 s (< 0.01 t_er) - test de bon fonctionnement. Le calcul non accelere jusqu'au doublement coute plusieurs heures ; run_revision.py documente et applique l'acceleration temporelle alpha=100 (ecart mesure <= 0.015 % sur R/R0 a t/t_er=0.05)."
  },
  "chapitre4_campagneA_entree_cinetique": {
   "L": 0.117,
@@ -413,7 +413,7 @@
   "save_ts_every": 1,
   "t_end_factor": 0.005266705991404736,
   "Nx": 40,
-  "description": "Chapitre 4, campagne A, entree cinetique (K_in,tot = 1). Attendu : u0=2.51 m/s, t2=1937 s, soit un facteur 2.90 sur t2. Tableau 4.13."
+  "description": "Chapitre 4, campagne A, entree cinetique (K_in,tot = 1). Attendu : u0=2.51 m/s, t2=1937 s, soit un facteur 2.90 sur t2. Tableau 4.13. Parametres d'execution enregistres : Nx=40, t_end=5 s (< 0.01 t_er) - test de bon fonctionnement. Le calcul non accelere jusqu'au doublement coute plusieurs heures ; run_revision.py documente et applique l'acceleration temporelle alpha=100 (ecart mesure <= 0.015 % sur R/R0 a t/t_er=0.05)."
  },
  "chapitre4_campagneA_entree_Kin05": {
   "L": 0.117,
@@ -458,7 +458,7 @@
   "save_ts_every": 1,
   "t_end_factor": 0.005266705991404736,
   "Nx": 40,
-  "description": "Chapitre 4, campagne A, entree a arete vive (K_in=0.5). Attendu : u0=3.09 m/s, tau_b0=32.3 Pa, t2=1330 s. Tableau 4.13."
+  "description": "Chapitre 4, campagne A, entree a arete vive (K_in=0.5). Attendu : u0=3.09 m/s, tau_b0=32.3 Pa, t2=1330 s. Tableau 4.13. Parametres d'execution enregistres : Nx=40, t_end=5 s (< 0.01 t_er) - test de bon fonctionnement. Le calcul non accelere jusqu'au doublement coute plusieurs heures ; run_revision.py documente et applique l'acceleration temporelle alpha=100 (ecart mesure <= 0.015 % sur R/R0 a t/t_er=0.05)."
  },
  "chapitre4_campagneB_1p50MPa_kout0": {
   "L": 100.0,

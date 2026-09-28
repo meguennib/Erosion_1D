@@ -924,15 +924,23 @@ Limiteur du schéma & --- & van Leer / MC & van Leer / MC \\
 (\texttt{data/scenarios.json}) sous les préfixes \texttt{chapitre4\_campagneA\_} et
 \texttt{chapitre4\_campagneB\_} (huit variantes : référence, perte aval, perte d'entrée pour la campagne A ;
 quatre charges et pertes aval pour la campagne B). Elles se chargent directement par
-\texttt{load\_scenario(nom)} et reproduisent les valeurs citées dans ce chapitre : \(u_0 = 4.52\) m/s,
-\(\tau_{b,0} = 62.9\) Pa et \(t_2 = 668\) s pour la campagne A, et les quatre temps d'échec du
-tableau~\ref{tab:validation-campagneB} pour la campagne B.
+\texttt{load\_scenario(nom)}. Pour la campagne B, le chargement suivi de \texttt{run\_simulation}
+reproduit les quatre temps d'échec du tableau~\ref{tab:validation-campagneB} sans autre réglage. Pour la
+campagne A, le chargement restitue les paramètres physiques du tableau, \(u_0 = 4.52\) m/s et
+\(\tau_{b,0} = 62.9\) Pa, mais le doublement \(t_2 = 665\) s demande une accélération temporelle : la
+vitesse d'érosion est portée à \(\alpha k_{er}\) avec \(\alpha = 100\), ce qui ramène le coût de
+plusieurs heures à quelques minutes. La transformation est exacte à \(0.015\)~\% près sur \(R/R_0\) à \(t/\ter = 0.05\)
+(mesure en tête de \texttt{run\_revision.py}) ; ce script la documente et l'applique, et
+\texttt{python3 run\_revision.py --case SolA\_Kout0 --nx 100 --facteur-fin 1.5} redonne
+\(t_2 = 665\) s, à \(0.5\)~\% du \(668.6\) s obtenu à \(N_x = 600\).
 \item Les paramètres \(d_p\), \(C_B\), \(C_r\), \(n_\lambda\) et \(f_{m,\max}\) sont ceux du
 code de calcul et sont donnés par campagne. Le calcul de référence de la campagne A utilise
 \(d_p = 75\ \si{\micro m}\) au lieu des \(20\ \si{\micro m}\) du sol étudié ; cette substitution est sans
-conséquence \emph{mesurable} sur cette configuration, car le facteur de résistance reste égal à \(1.000\)
-dans les deux cas (section~\ref{sec:verif-fm}) : la rétroaction rhéologique est inactive à l'échelle du
-laboratoire, quel que soit le matériau fin considéré.
+conséquence \emph{mesurable} sur cette configuration : un contrôle direct des deux valeurs (mêmes
+conditions, \(N_x = 100\), jusqu'à \(R/R_0 \approx 1.95\)) donne un écart maximal de \(0.023\)~\%
+sur \(R_{\mathrm{out}}/R_0\), le facteur de résistance restant inférieur à \(1.0001\) dans les deux cas
+(section~\ref{sec:verif-fm}) : la rétroaction rhéologique est inactive à l'échelle du laboratoire, quel que
+soit le matériau fin considéré.
 \end{tablenotes}
 \end{table}
 
