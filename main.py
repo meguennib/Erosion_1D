@@ -14,7 +14,6 @@ def main():
     out_dir = Path("output_thesis_v1")
     out_dir.mkdir(parents=True, exist_ok=True)
     logger = setup_logger(out_dir / "run.log")
-
     result = run_simulation(p, logger)
     logger.info(
         "Reference run completed: "
