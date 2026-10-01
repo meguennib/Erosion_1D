@@ -40,6 +40,9 @@ class Params:
     lm_mode: str = "clR0"
 
     # ---- Transport scheme ----
+    # "eulerian" reproduces the v1 reference transport operator.
+    # "slfv" activates the experimental conservative semi-Lagrangian operator.
+    transport_method: str = "eulerian"
     phi_scheme: str = "muscl"
     phi_form: str = "conservative"
     phi_limiter: str = "vanleer"
