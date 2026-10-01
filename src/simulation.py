@@ -148,6 +148,11 @@ def run_simulation(p, logger):
         "pressure_solver": "bracketing_bisection",
         "transport_velocity": "u=Q/A",
         "transport_method": str(p.transport_method),
+        "time_step_policy": (
+            "min(dt_src,dt_morph,dt_max)" if str(p.transport_method).lower() == "slfv"
+            else "min(dt_adv,dt_src,dt_max)"
+        ),
+        "morph_rel_change": float(p.morph_rel_change),
         "soil_density_definition": "rho_s=rho_w+phi_soil*(rho_p-rho_w)",
     }
 
@@ -237,6 +242,7 @@ def run_simulation(p, logger):
         dt_candidate = np.inf
         active_cfl = np.nan
         dt_clipped_to_max = False
+        dt_morph = np.inf
 
         if p.dt_mode == "adaptive":
             adaptive_step_count += 1
@@ -248,10 +254,38 @@ def run_simulation(p, logger):
                 np.maximum(R, p.R_min) * rho_s + 1e-30
             )
             k_max = float(np.max(k_arr))
+
+            # The relaxation source is integrated analytically below.
+            # Therefore k*dt <= 0.5 is an accuracy criterion, not a
+            # stability restriction. It is retained for controlled
+            # operator splitting and comparison with the v1 reference.
             dt_src = np.inf if k_max <= 1e-30 else 0.5 / k_max
 
-            dt_candidate = min(dt_adv, dt_src, p.dt_max, t_end - t)
-            dt_clipped_to_max = dt_candidate == p.dt_max and p.dt_max < min(dt_adv, dt_src)
+            # Explicit Euler geometry update: constrain the fractional
+            # radius change. This is the physical evolution that remains
+            # explicitly time-integrated after the CFL restriction is lifted.
+            Rt_est = (mdot / rho_s)
+            morph_rate = np.max(Rt_est / np.maximum(R, p.R_min))
+            dt_morph = (
+                np.inf if morph_rate <= 1e-30
+                else p.morph_rel_change / morph_rate
+            )
+
+            is_slfv = str(p.transport_method).lower() == "slfv"
+            dt_candidate = min(
+                dt_src, dt_morph, p.dt_max, t_end - t
+            ) if is_slfv else min(
+                dt_adv, dt_src, p.dt_max, t_end - t
+            )
+
+            limiting_values = (
+                [dt_src, dt_morph]
+                if is_slfv else [dt_adv, dt_src]
+            )
+            dt_clipped_to_max = (
+                dt_candidate == p.dt_max
+                and p.dt_max < min(limiting_values)
+            )
 
             if dt_candidate < p.dt_min:
                 raise RuntimeError(
@@ -339,6 +373,7 @@ def run_simulation(p, logger):
                 "dt_adv": float(dt_adv) if np.isfinite(dt_adv) else np.nan,
                 "dt_src": float(dt_src) if np.isfinite(dt_src) else np.nan,
                 "dt_candidate": float(dt_candidate) if np.isfinite(dt_candidate) else np.nan,
+                "dt_morph": float(dt_morph) if np.isfinite(dt_morph) else np.nan,
                 "active_cfl": float(active_cfl) if np.isfinite(active_cfl) else np.nan,
                 "dt_clipped_to_max": bool(dt_clipped_to_max),
                 "Q": float(Q),
