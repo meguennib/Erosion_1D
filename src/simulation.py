@@ -2,6 +2,7 @@ import numpy as np
 
 from .numerics import advection_phi, ddx_centered
 from .slfv import slfv_advection_phi
+from .slfv_reactive import slfv_reactive_phi
 from .physics import (
     barenblatt_fw,
     fm_mixture,
@@ -151,7 +152,7 @@ def run_simulation(p, logger):
         "transport_velocity": "u=Q/A",
         "transport_method": str(p.transport_method),
         "time_step_policy": (
-            "min(dt_src,dt_morph,dt_max)" if str(p.transport_method).lower() == "slfv"
+            "min(dt_src,dt_morph,dt_max)" if str(p.transport_method).lower() in ("slfv", "slfv-reactive")
             else "min(dt_adv,dt_src,dt_max)"
         ),
         "morph_rel_change": float(p.morph_rel_change),
@@ -274,7 +275,7 @@ def run_simulation(p, logger):
                 else p.morph_rel_change / morph_rate
             )
 
-            is_slfv = str(p.transport_method).lower() == "slfv"
+            is_slfv = str(p.transport_method).lower() in ("slfv", "slfv-reactive")
             dt_candidate = min(
                 dt_src, dt_morph, p.dt_max, t_end - t
             ) if is_slfv else min(
@@ -306,7 +307,20 @@ def run_simulation(p, logger):
         Rt = (mdot / rho_s) * np.sqrt(1.0 + Rx ** 2)
         R_new = np.maximum(R + dt * Rt, p.R_min)
 
-        if str(p.transport_method).lower() == "slfv":
+        if str(p.transport_method).lower() == "slfv-reactive":
+            k = 2.0 * mdot / (
+                np.maximum(R, p.R_min) * rho_s + 1e-30
+            )
+            phi_new = slfv_reactive_phi(
+                phi,
+                u,
+                k,
+                dx,
+                dt,
+                p.phi_soil,
+                phi_in=p.phi_in,
+            )
+        elif str(p.transport_method).lower() == "slfv":
             phi_adv = slfv_advection_phi(
                 phi,
                 u,
@@ -326,13 +340,14 @@ def run_simulation(p, logger):
                 limiter=p.phi_limiter,
             )
 
-        k = 2.0 * mdot / (
-            np.maximum(R, p.R_min) * rho_s + 1e-30
-        )
-        phi_new = p.phi_soil - (
-            p.phi_soil - phi_adv
-        ) * np.exp(-k * dt)
-        phi_new = np.clip(phi_new, 0.0, p.phi_soil * (1.0 - 1e-6))
+        if str(p.transport_method).lower() != "slfv-reactive":
+            k = 2.0 * mdot / (
+                np.maximum(R, p.R_min) * rho_s + 1e-30
+            )
+            phi_new = p.phi_soil - (
+                p.phi_soil - phi_adv
+            ) * np.exp(-k * dt)
+            phi_new = np.clip(phi_new, 0.0, p.phi_soil * (1.0 - 1e-6))
 
         R = R_new
         phi = phi_new
