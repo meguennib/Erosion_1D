@@ -34,6 +34,8 @@ def _validate_parameters(p):
         raise ValueError("CFL must satisfy 0 < CFL <= 1.")
     if p.dt_min <= 0 or p.dt_max <= 0 or p.dt_min > p.dt_max:
         raise ValueError("Require 0 < dt_min <= dt_max.")
+    if not (0.0 < p.morph_rel_change <= 1.0):
+        raise ValueError("morph_rel_change must satisfy 0 < morph_rel_change <= 1.")
 
 
 def solve_Q_pressure_imposed(R, phi, p, dx, Q_guess):
@@ -264,7 +266,8 @@ def run_simulation(p, logger):
             # Explicit Euler geometry update: constrain the fractional
             # radius change. This is the physical evolution that remains
             # explicitly time-integrated after the CFL restriction is lifted.
-            Rt_est = (mdot / rho_s)
+            Rx_est = ddx_centered(R, dx)
+            Rt_est = (mdot / rho_s) * np.sqrt(1.0 + Rx_est ** 2)
             morph_rate = np.max(Rt_est / np.maximum(R, p.R_min))
             dt_morph = (
                 np.inf if morph_rate <= 1e-30
