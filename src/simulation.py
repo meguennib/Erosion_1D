@@ -1,6 +1,7 @@
 import numpy as np
 
 from .numerics import advection_phi, ddx_centered
+from .slfv import slfv_advection_phi
 from .physics import (
     barenblatt_fw,
     fm_mixture,
@@ -146,6 +147,7 @@ def run_simulation(p, logger):
         "mixture_multiplier_model": "fm_mixture",
         "pressure_solver": "bracketing_bisection",
         "transport_velocity": "u=Q/A",
+        "transport_method": str(p.transport_method),
         "soil_density_definition": "rho_s=rho_w+phi_soil*(rho_p-rho_w)",
     }
 
@@ -199,7 +201,7 @@ def run_simulation(p, logger):
         f"Pin={p.Pin:.6e} Pa; Pout={p.Pout:.6e} Pa"
     )
     logger.info(
-        f"transport={p.phi_scheme}/{p.phi_limiter}/conservative; "
+        f"transport={p.transport_method}:{p.phi_scheme}/{p.phi_limiter}/conservative; "
         f"friction=Barenblatt; pressure_solver=bracketing+bisection"
     )
 
@@ -267,16 +269,25 @@ def run_simulation(p, logger):
         Rt = (mdot / rho_s) * np.sqrt(1.0 + Rx ** 2)
         R_new = np.maximum(R + dt * Rt, p.R_min)
 
-        phi_adv = advection_phi(
-            phi,
-            u,
-            dx,
-            dt,
-            scheme=p.phi_scheme,
-            form="conservative",
-            phi_in=p.phi_in,
-            limiter=p.phi_limiter,
-        )
+        if str(p.transport_method).lower() == "slfv":
+            phi_adv = slfv_advection_phi(
+                phi,
+                u,
+                dx,
+                dt,
+                phi_in=p.phi_in,
+            )
+        else:
+            phi_adv = advection_phi(
+                phi,
+                u,
+                dx,
+                dt,
+                scheme=p.phi_scheme,
+                form="conservative",
+                phi_in=p.phi_in,
+                limiter=p.phi_limiter,
+            )
 
         k = 2.0 * mdot / (
             np.maximum(R, p.R_min) * rho_s + 1e-30
