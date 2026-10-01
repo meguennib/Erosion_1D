@@ -12,7 +12,8 @@ The evolved state is (R(x,t)) and (phi(x,t)). The reference transport equation i
 \partial_t\phi+\partial_x(u\phi)
 =
 \frac{2\dot m}{R\rho_s}(\phi_{soil}-\phi),
-qquad u=Q/A,quad A=\pi R^2.
+qquad
+u=Q/A,quad A=\pi R^2.
 ]
 
 No additional (eta) multiplier is used in the reference transport velocity.
@@ -44,7 +45,10 @@ The concentration equation is discretized with cell-centred finite volumes, MUSC
 The relaxation source is integrated analytically:
 
 [
-\phi^{n+1}=\phi_{soil}-(\phi_{soil}-\phi^*)e^{-k^n\Delta t}.
+\phi^{n+1}
+=
+\phi_{soil}-
+(\phi_{soil}-\phi^*)e^{-k^n\Delta t}.
 ]
 
 The adaptive time step uses
