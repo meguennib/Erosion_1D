@@ -54,6 +54,10 @@ class Params:
     dt_max: float = 10.0
     t_end_factor: float = 15.7
 
+    # SLFV-only precision control: maximum fractional radius change per step.
+    # This is a temporal accuracy criterion, not a physical constitutive law.
+    morph_rel_change: float = 0.01
+
     # ---- Pressure solver ----
     Q_tol_abs: float = 1e-3       # [Pa]
     Q_tol_rel: float = 1e-8       # relative pressure residual tolerance
