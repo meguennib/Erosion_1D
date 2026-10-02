@@ -1,0 +1,50 @@
+name: SLFV decisive verification
+
+on:
+  push:
+    branches:
+      - slfv-reactive-characteristic
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip numpy pandas
+      - run: |
+          python run_slfv_reactive_audit.py             --t-end-factor 0.10             --morph-rel-change 0.01             --out output_ci_short
+      - run: |
+          python - <<'PY'
+          from src.config import Params
+          from src.simulation import run_simulation
+          from src.utils import setup_logger
+          from pathlib import Path
+
+          cases = [
+              ("slfv-reactive", 0.5),
+              ("slfv-reactive", 1.0),
+              ("slfv-reactive", 2.2),
+          ]
+
+          root = Path("output_ci_progression")
+          root.mkdir(exist_ok=True)
+
+          for method, fac in cases:
+              p = Params(transport_method=method,
+                         t_end_factor=fac,
+                         morph_rel_change=0.01,
+                         log_every_steps=100000,
+                         save_ts_every=1)
+              out = root / f"{method}_{fac:g}"
+              out.mkdir(parents=True, exist_ok=True)
+              result = run_simulation(p, setup_logger(out / "run.log"))
+              m = result["run_manifest"]
+              print(method, fac, m["n_steps"], m["t_final_over_ter"], m["stop_reason"])
+              if m["stop_reason"] == "nan_inf":
+                  raise SystemExit("Non-finite state detected")
+          PY
